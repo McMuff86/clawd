@@ -78,6 +78,44 @@ def chamfer_curves(curve_id1: str, curve_id2: str, distance1: float,
         return client.send_command("chamfer_curves", params)
 
 
+def join_curves(curve_ids: list, delete_input: bool = True) -> dict:
+    """Join multiple curves into polycurves.
+    
+    Args:
+        curve_ids: List of curve GUIDs to join
+        delete_input: Delete original curves after joining
+    
+    Returns:
+        Result with joined curve IDs
+    """
+    params = {
+        "curve_ids": curve_ids,
+        "delete_input": delete_input
+    }
+    
+    with RhinoClient() as client:
+        return client.send_command("join_curves", params)
+
+
+def explode_curve(curve_id: str, delete_input: bool = True) -> dict:
+    """Explode a polycurve into segments.
+    
+    Args:
+        curve_id: Polycurve GUID to explode
+        delete_input: Delete original curve after exploding
+    
+    Returns:
+        Result with segment curve IDs
+    """
+    params = {
+        "curve_id": curve_id,
+        "delete_input": delete_input
+    }
+    
+    with RhinoClient() as client:
+        return client.send_command("explode_curve", params)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Curve operations')
     subparsers = parser.add_subparsers(dest='action', help='Action to perform')
@@ -105,6 +143,16 @@ if __name__ == '__main__':
     chamfer_p.add_argument('--point1', type=str, help='Point on curve 1 as x,y,z')
     chamfer_p.add_argument('--point2', type=str, help='Point on curve 2 as x,y,z')
     
+    # Join
+    join_p = subparsers.add_parser('join', help='Join curves into polycurves')
+    join_p.add_argument('curve_ids', nargs='+', help='Curve GUIDs to join')
+    join_p.add_argument('--keep', '-k', action='store_true', help='Keep input curves')
+    
+    # Explode
+    explode_p = subparsers.add_parser('explode', help='Explode polycurve into segments')
+    explode_p.add_argument('curve_id', help='Polycurve GUID')
+    explode_p.add_argument('--keep', '-k', action='store_true', help='Keep input curve')
+    
     args = parser.parse_args()
     
     def parse_point(s: str) -> list:
@@ -121,6 +169,10 @@ if __name__ == '__main__':
         point1 = parse_point(args.point1) if args.point1 else None
         point2 = parse_point(args.point2) if args.point2 else None
         result = chamfer_curves(args.curve1, args.curve2, args.distance, args.distance2, point1, point2)
+    elif args.action == 'join':
+        result = join_curves(args.curve_ids, delete_input=not args.keep)
+    elif args.action == 'explode':
+        result = explode_curve(args.curve_id, delete_input=not args.keep)
     else:
         parser.print_help()
         sys.exit(1)

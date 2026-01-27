@@ -13,7 +13,8 @@
   "screenshots": {
     "default_width": 1920,
     "default_height": 1080,
-    "output_dir": "/mnt/c/Users/Adi.Muff/Pictures/RhinoMCP"
+    "linux_dir": "/home/mcmuff/clawd/projects/rhinomcp-dev/captures",
+    "windows_dir": "\\\\wsl.localhost\\Ubuntu\\home\\mcmuff\\clawd\\projects\\rhinomcp-dev\\captures"
   },
   "logging": {
     "log_file": "/mnt/c/Users/Adi.Muff/AppData/Local/Temp/rhinomcp.log",

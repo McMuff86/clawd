@@ -84,30 +84,49 @@ def capture_viewport(viewport_name: str = "Perspective", width: int = 1920,
         viewport_name: Viewport to capture
         width: Image width
         height: Image height
-        filename: Output filename (saved to config screenshots dir if relative)
+        filename: Output filename (auto-generated if not provided)
     
     Returns:
-        If filename given: path to saved file
-        If no filename: base64-encoded PNG image data
+        Dict with 'linux_path' for reading and 'windows_path' sent to Rhino
     """
-    # Get screenshot dir from config
-    screenshots_config = CONFIG.get("screenshots", {})
-    output_dir = screenshots_config.get("output_dir")
+    import time
     
-    # If filename is relative and we have output_dir, make it absolute
-    if filename and output_dir and not Path(filename).is_absolute():
-        filename = str(Path(output_dir) / filename)
+    # Get screenshot dirs from config
+    screenshots_config = CONFIG.get("screenshots", {})
+    linux_dir = screenshots_config.get("linux_dir", "/tmp")
+    windows_dir = screenshots_config.get("windows_dir")
+    
+    # Generate filename if not provided
+    if not filename:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"capture_{timestamp}.png"
+    
+    # Build paths
+    linux_path = str(Path(linux_dir) / filename)
+    
+    # If we have windows_dir (WSL setup), use UNC path for Rhino
+    if windows_dir:
+        windows_path = f"{windows_dir}\\{filename}"
+    else:
+        # Fallback: use linux path (works if Rhino can access it)
+        windows_path = linux_path
     
     params = {
         "viewport_name": viewport_name,
         "width": width,
-        "height": height
+        "height": height,
+        "filename": windows_path
     }
-    if filename:
-        params["filename"] = filename
     
     with RhinoClient() as client:
-        return client.send_command("capture_viewport", params)
+        result = client.send_command("capture_viewport", params)
+    
+    # Add linux path for easy reading
+    if result.get("success"):
+        result["linux_path"] = linux_path
+        result["windows_path"] = windows_path
+    
+    return result
 
 
 def render_view(viewport_name: str = "Perspective", width: int = 1920,
