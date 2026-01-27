@@ -1,0 +1,22 @@
+{
+  "connection": {
+    "host": "172.31.96.1",
+    "port": 1999,
+    "timeout": 15.0,
+    "max_retries": 3,
+    "retry_delay": 1.0
+  },
+  "defaults": {
+    "layer": "Default",
+    "color": [128, 128, 128]
+  },
+  "screenshots": {
+    "default_width": 1920,
+    "default_height": 1080,
+    "output_dir": "/mnt/c/Users/Adi.Muff/Pictures/RhinoMCP"
+  },
+  "logging": {
+    "log_file": "/mnt/c/Users/Adi.Muff/AppData/Local/Temp/rhinomcp.log",
+    "tail_lines": 30
+  }
+}

@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Viewport operations: views, camera, screenshots."""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from rhino_client import RhinoClient, CONFIG
+
+
+def set_view(view_name: str) -> dict:
+    """Set viewport to a standard view.
+    
+    Args:
+        view_name: One of 'Top', 'Bottom', 'Front', 'Back', 'Left', 'Right', 
+                   'Perspective', 'TwoPointPerspective'
+    """
+    params = {"view_type": view_name}
+    
+    with RhinoClient() as client:
+        return client.send_command("set_view", params)
+
+
+def zoom_extents(viewport_name: str = "Perspective") -> dict:
+    """Zoom to show all objects."""
+    params = {"viewport_name": viewport_name}
+    
+    with RhinoClient() as client:
+        return client.send_command("zoom_extents", params)
+
+
+def zoom_selected(viewport_name: str = "Perspective") -> dict:
+    """Zoom to show selected objects."""
+    params = {"viewport_name": viewport_name}
+    
+    with RhinoClient() as client:
+        return client.send_command("zoom_selected", params)
+
+
+def orbit_camera(yaw: float = 0, pitch: float = 0, viewport_name: str = "Perspective") -> dict:
+    """Orbit the camera around the target.
+    
+    Args:
+        yaw: Horizontal rotation in degrees
+        pitch: Vertical rotation in degrees
+        viewport_name: Viewport to orbit
+    """
+    params = {
+        "yaw": yaw,
+        "pitch": pitch,
+        "viewport_name": viewport_name
+    }
+    
+    with RhinoClient() as client:
+        return client.send_command("orbit_camera", params)
+
+
+def set_camera(position: list, target: list, lens: float = 50.0, 
+               viewport_name: str = "Perspective") -> dict:
+    """Set camera position, target, and lens.
+    
+    Args:
+        position: Camera position [x, y, z]
+        target: Look-at target [x, y, z]
+        lens: Lens length in mm (default: 50)
+        viewport_name: Viewport to modify
+    """
+    params = {
+        "position": position,
+        "target": target,
+        "lens": lens,
+        "viewport_name": viewport_name
+    }
+    
+    with RhinoClient() as client:
+        return client.send_command("set_camera", params)
+
+
+def capture_viewport(viewport_name: str = "Perspective", width: int = 1920, 
+                     height: int = 1080, filename: str = None) -> dict:
+    """Capture viewport to image.
+    
+    Args:
+        viewport_name: Viewport to capture
+        width: Image width
+        height: Image height
+        filename: Output filename (saved to config screenshots dir if relative)
+    
+    Returns:
+        If filename given: path to saved file
+        If no filename: base64-encoded PNG image data
+    """
+    # Get screenshot dir from config
+    screenshots_config = CONFIG.get("screenshots", {})
+    output_dir = screenshots_config.get("output_dir")
+    
+    # If filename is relative and we have output_dir, make it absolute
+    if filename and output_dir and not Path(filename).is_absolute():
+        filename = str(Path(output_dir) / filename)
+    
+    params = {
+        "viewport_name": viewport_name,
+        "width": width,
+        "height": height
+    }
+    if filename:
+        params["filename"] = filename
+    
+    with RhinoClient() as client:
+        return client.send_command("capture_viewport", params)
+
+
+def render_view(viewport_name: str = "Perspective", width: int = 1920,
+                height: int = 1080, filename: str = None) -> dict:
+    """Render viewport (with materials/lighting).
+    
+    Args:
+        viewport_name: Viewport to render
+        width: Render width
+        height: Render height
+        filename: Output filename (optional)
+    """
+    params = {
+        "viewport_name": viewport_name,
+        "width": width,
+        "height": height
+    }
+    if filename:
+        params["filename"] = filename
+    
+    with RhinoClient() as client:
+        return client.send_command("render_view", params)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Viewport operations')
+    subparsers = parser.add_subparsers(dest='action', help='Action to perform')
+    
+    # Set view
+    view_p = subparsers.add_parser('view', help='Set standard view')
+    view_p.add_argument('name', choices=['Top', 'Bottom', 'Front', 'Back', 
+                                          'Left', 'Right', 'Perspective'],
+                        help='View name')
+    
+    # Zoom extents
+    zoom_p = subparsers.add_parser('zoom', help='Zoom extents')
+    zoom_p.add_argument('--viewport', '-v', default='Perspective', help='Viewport name')
+    zoom_p.add_argument('--selected', '-s', action='store_true', help='Zoom to selection')
+    
+    # Orbit
+    orbit_p = subparsers.add_parser('orbit', help='Orbit camera')
+    orbit_p.add_argument('--yaw', '-y', type=float, default=0, help='Horizontal rotation (deg)')
+    orbit_p.add_argument('--pitch', '-p', type=float, default=0, help='Vertical rotation (deg)')
+    orbit_p.add_argument('--viewport', '-v', default='Perspective', help='Viewport name')
+    
+    # Camera
+    camera_p = subparsers.add_parser('camera', help='Set camera')
+    camera_p.add_argument('--position', type=str, required=True, help='Position as x,y,z')
+    camera_p.add_argument('--target', type=str, required=True, help='Target as x,y,z')
+    camera_p.add_argument('--lens', type=float, default=50.0, help='Lens mm')
+    camera_p.add_argument('--viewport', '-v', default='Perspective', help='Viewport name')
+    
+    # Screenshot
+    screenshot_p = subparsers.add_parser('screenshot', help='Capture viewport')
+    screenshot_p.add_argument('--viewport', '-v', default='Perspective', help='Viewport name')
+    screenshot_p.add_argument('--width', '-W', type=int, default=1920, help='Width')
+    screenshot_p.add_argument('--height', '-H', type=int, default=1080, help='Height')
+    screenshot_p.add_argument('--output', '-o', type=str, help='Output filename')
+    
+    # Render
+    render_p = subparsers.add_parser('render', help='Render viewport')
+    render_p.add_argument('--viewport', '-v', default='Perspective', help='Viewport name')
+    render_p.add_argument('--width', '-W', type=int, default=1920, help='Width')
+    render_p.add_argument('--height', '-H', type=int, default=1080, help='Height')
+    render_p.add_argument('--output', '-o', type=str, help='Output filename')
+    
+    args = parser.parse_args()
+    
+    def parse_point(s: str) -> list:
+        return [float(x) for x in s.split(',')]
+    
+    if args.action == 'view':
+        result = set_view(args.name)
+    elif args.action == 'zoom':
+        if args.selected:
+            result = zoom_selected(args.viewport)
+        else:
+            result = zoom_extents(args.viewport)
+    elif args.action == 'orbit':
+        result = orbit_camera(args.yaw, args.pitch, args.viewport)
+    elif args.action == 'camera':
+        result = set_camera(
+            parse_point(args.position),
+            parse_point(args.target),
+            args.lens,
+            args.viewport
+        )
+    elif args.action == 'screenshot':
+        result = capture_viewport(args.viewport, args.width, args.height, args.output)
+    elif args.action == 'render':
+        result = render_view(args.viewport, args.width, args.height, args.output)
+    else:
+        parser.print_help()
+        sys.exit(1)
+    
+    print(json.dumps(result, indent=2))
