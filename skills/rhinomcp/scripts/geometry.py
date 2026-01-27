@@ -67,6 +67,7 @@ def main():
     cp = subparsers.add_parser('cylinder', help='Create a cylinder')
     cp.add_argument('--radius', '-r', type=float, default=1.0)
     cp.add_argument('--height', '-ht', type=float, default=2.0)
+    cp.add_argument('--no-cap', action='store_true', help='Create open cylinder (default: capped)')
     cp.add_argument('--name', '-n', type=str)
     cp.add_argument('--position', '-pos', type=str, default='0,0,0')
     cp.add_argument('--color', '-c', type=str)
@@ -76,6 +77,7 @@ def main():
     conep = subparsers.add_parser('cone', help='Create a cone')
     conep.add_argument('--radius', '-r', type=float, default=1.0)
     conep.add_argument('--height', '-ht', type=float, default=2.0)
+    conep.add_argument('--no-cap', action='store_true', help='Create open cone (default: capped)')
     conep.add_argument('--name', '-n', type=str)
     conep.add_argument('--position', '-pos', type=str, default='0,0,0')
     conep.add_argument('--color', '-c', type=str)
@@ -131,10 +133,10 @@ def main():
         params = {"width": args.width, "length": args.length, "height": args.height}
         obj_type = "BOX"
     elif args.geometry == 'cylinder':
-        params = {"radius": args.radius, "height": args.height}
+        params = {"radius": args.radius, "height": args.height, "cap": not getattr(args, 'no_cap', False)}
         obj_type = "CYLINDER"
     elif args.geometry == 'cone':
-        params = {"radius": args.radius, "height": args.height}
+        params = {"radius": args.radius, "height": args.height, "cap": not getattr(args, 'no_cap', False)}
         obj_type = "CONE"
     elif args.geometry == 'point':
         params = {"location": position or [0, 0, 0]}
