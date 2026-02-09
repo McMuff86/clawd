@@ -1,0 +1,72 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "dvarchMultiPrompt_dvarchExterior.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "masterpiece, best quality, 8k uhd, photorealistic architectural exterior rendering, modern minimalist villa with large glass facades, warm oak wood cladding and exposed concrete, surrounded by mature trees and manicured garden, dramatic golden hour lighting, volumetric light rays through trees, shallow depth of field, architectural photography by Iwan Baan, Dezeen award winning, ultra detailed materials and textures, reflections in glass, ambient occlusion, ray traced global illumination, professional architectural visualization"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "text, watermark, logo, blurry, distorted, deformed, low quality, cartoon, anime, painting, sketch, illustration, ugly, oversaturated, nsfw, people, humans, person"
+    }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 768,
+      "batch_size": 1
+    }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["2", 0],
+      "negative": ["3", 0],
+      "latent_image": ["4", 0],
+      "seed": 716284935,
+      "steps": 35,
+      "cfg": 7.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1.0
+    }
+  },
+  "6": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["5", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "10": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-UltraSharp.pth"
+    }
+  },
+  "11": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": ["10", 0],
+      "image": ["6", 0]
+    }
+  },
+  "99": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["11", 0],
+      "filename_prefix": "Archviz/archviz_4k"
+    }
+  }
+}

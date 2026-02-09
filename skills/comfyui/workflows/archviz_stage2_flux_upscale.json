@@ -1,0 +1,101 @@
+{
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "sentinel_00017_.png",
+      "upload": "image"
+    }
+  },
+  "20": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux1-dev-fp8.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    }
+  },
+  "21": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
+      "type": "flux"
+    }
+  },
+  "22": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
+  },
+  "23": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["21", 0],
+      "text": "Ultra high resolution photorealistic architectural exterior photograph, modern minimalist villa with floor to ceiling glass facades reflecting surroundings, warm natural oak wood cladding with visible grain texture and exposed raw concrete walls with subtle formwork marks, surrounded by mature deciduous trees casting dappled shadows and a manicured landscaped garden with ornamental grasses, dramatic golden hour lighting with long warm shadows and volumetric god rays filtering through the foliage, tack sharp architectural photography by Iwan Baan for Dezeen, hyper detailed material textures showing every pore and grain, crystal clear reflections in glass capturing sky and greenery, 8k uhd professional large format photograph, award winning architecture"
+    }
+  },
+  "24": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["21", 0],
+      "text": ""
+    }
+  },
+  "25": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["10", 0],
+      "vae": ["22", 0]
+    }
+  },
+  "26": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["20", 0],
+      "positive": ["23", 0],
+      "negative": ["24", 0],
+      "latent_image": ["25", 0],
+      "seed": 445892137,
+      "steps": 20,
+      "cfg": 3.5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 0.42
+    }
+  },
+  "27": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["26", 0],
+      "vae": ["22", 0]
+    }
+  },
+  "30": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-UltraSharp.pth"
+    }
+  },
+  "31": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": ["30", 0],
+      "image": ["27", 0]
+    }
+  },
+  "32": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": ["31", 0],
+      "upscale_method": "lanczos",
+      "scale_by": 0.5
+    }
+  },
+  "99": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["32", 0],
+      "filename_prefix": "Archviz/archviz_4k_final"
+    }
+  }
+}

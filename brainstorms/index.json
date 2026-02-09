@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "2026-01-25_rhino-research",
+      "title": "Rhino Community & Side-Hustle Brainstorm",
+      "date": "2026-01-25",
+      "tags": ["rhino", "grasshopper", "side-hustle", "intelliplan", "research"],
+      "status": "actionable",
+      "priority": 2,
+      "source": "agent",
+      "file": "2026-01-25_rhino-research.md"
+    }
+  ]
+}

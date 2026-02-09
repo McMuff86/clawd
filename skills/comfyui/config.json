@@ -1,0 +1,21 @@
+{
+  "connection": {
+    "host": "host.docker.internal",
+    "port": 8188
+  },
+  "startup": {
+    "bat_path": "C:\\Users\\Adi.Muff\\repos\\ComfyUI_windows_portable\\ComfyUI\\run_nvidia_gpu.bat",
+    "startup_wait": 30,
+    "max_retries": 3
+  },
+  "defaults": {
+    "model_preset": "dreamshaperXL",
+    "output_dir": "/home/mcmuff/clawd/output/comfyui",
+    "negative_prompt": "bad quality, worst quality, low quality, blurry, deformed, disfigured, mutation, extra limbs, watermark, text, signature"
+  },
+  "logging": {
+    "log_dir": "/home/mcmuff/clawd/logs/comfyui",
+    "log_generations": true,
+    "log_starts": true
+  }
+}

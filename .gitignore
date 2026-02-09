@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+*:Zone.Identifier
+
+# Output/Generated
+output/
+logs/
+media/
+-o/
+
+# Temp
+*.tmp
+*.bak
+
+# Large files
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+!avatar.png
+!avatar_small.png
+!skills/comicmaster/assets/**
+
+# Node modules
+node_modules/
+
+# Secrets
+.env
+*.key
+projects/rhinomcp-dev/
+projects/rhinomcp/
+projects/

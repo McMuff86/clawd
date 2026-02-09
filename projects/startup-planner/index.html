@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RhinoAssemblyOutliner – 12-Wochen-Plan</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2d3140;
+    --text: #e4e6ec;
+    --text-dim: #8b8fa3;
+    --accent: #6c5ce7;
+    --accent-light: #a29bfe;
+    --green: #00b894;
+    --green-dim: #00b89433;
+    --orange: #fdcb6e;
+    --red: #e17055;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    padding: 30px 0 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .header h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .header h1 span { color: var(--accent-light); }
+  .header p { color: var(--text-dim); font-size: 0.95rem; }
+
+  /* Progress Bar */
+  .progress-section {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+  }
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .progress-header h3 { font-size: 1rem; font-weight: 600; }
+  .progress-stats { color: var(--text-dim); font-size: 0.85rem; }
+  .progress-stats strong { color: var(--green); }
+  .progress-bar {
+    width: 100%;
+    height: 10px;
+    background: var(--surface2);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--green));
+    border-radius: 5px;
+    transition: width 0.5s ease;
+  }
+  .progress-phases {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .phase-chip {
+    flex: 1;
+    text-align: center;
+    padding: 8px 6px;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .phase-chip:hover { border-color: var(--accent); }
+  .phase-chip.active { border-color: var(--accent); background: #6c5ce722; color: var(--accent-light); }
+  .phase-chip.completed { border-color: var(--green); background: var(--green-dim); color: var(--green); }
+
+  /* Phase Sections */
+  .phase {
+    background: var(--surface);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .phase-header {
+    padding: 16px 20px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+    transition: background 0.2s;
+  }
+  .phase-header:hover { background: var(--surface2); }
+  .phase-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .phase-title h2 { font-size: 1.1rem; font-weight: 600; }
+  .phase-badge {
+    font-size: 0.7rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .phase-badge.p1 { background: #6c5ce733; color: var(--accent-light); }
+  .phase-badge.p2 { background: #fdcb6e33; color: var(--orange); }
+  .phase-badge.p3 { background: #00b89433; color: var(--green); }
+  .phase-badge.p4 { background: #e1705533; color: var(--red); }
+  .phase-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+  .phase-count { font-weight: 600; }
+  .phase-count.done { color: var(--green); }
+  .chevron {
+    transition: transform 0.3s;
+    font-size: 0.9rem;
+  }
+  .chevron.open { transform: rotate(180deg); }
+
+  .phase-body {
+    display: none;
+    padding: 0 20px 20px;
+  }
+  .phase-body.open { display: block; }
+
+  /* Week Group */
+  .week-group { margin-bottom: 16px; }
+  .week-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Tasks */
+  .task {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    transition: background 0.2s;
+  }
+  .task:hover { background: var(--surface2); }
+  .task.completed .task-text { text-decoration: line-through; color: var(--text-dim); }
+  .task input[type="checkbox"] {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    border: 2px solid var(--border);
+    border-radius: 5px;
+    cursor: pointer;
+    margin-top: 2px;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .task input[type="checkbox"]:hover { border-color: var(--accent); }
+  .task input[type="checkbox"]:checked {
+    background: var(--green);
+    border-color: var(--green);
+  }
+  .task input[type="checkbox"]:checked::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .task-text { font-size: 0.92rem; flex: 1; }
+
+  /* Deliverable */
+  .deliverable {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: #6c5ce711;
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    font-size: 0.85rem;
+  }
+  .deliverable strong { color: var(--accent-light); }
+
+  /* Notes */
+  .notes-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .notes-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .notes-area {
+    width: 100%;
+    min-height: 80px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-family: var(--font);
+    font-size: 0.88rem;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .notes-area:focus { border-color: var(--accent); }
+  .notes-area::placeholder { color: var(--text-dim); }
+
+  /* Goals Table */
+  .goals {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+  }
+  .goals h3 { font-size: 1rem; margin-bottom: 12px; }
+  .goal-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .goal-row:last-child { border-bottom: none; }
+  .goal-label { color: var(--text-dim); font-size: 0.9rem; }
+  .goal-value { font-weight: 600; font-size: 0.9rem; }
+  .goal-value.highlight { color: var(--green); }
+
+  /* Global Notes */
+  .global-notes {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+  }
+  .global-notes h3 { font-size: 1rem; margin-bottom: 12px; }
+  .global-notes textarea {
+    width: 100%;
+    min-height: 120px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 12px;
+    font-family: var(--font);
+    font-size: 0.9rem;
+    resize: vertical;
+    outline: none;
+  }
+  .global-notes textarea:focus { border-color: var(--accent); }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 20px 0;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    border-top: 1px solid var(--border);
+  }
+  .footer a { color: var(--accent-light); text-decoration: none; }
+
+  /* Reset Button */
+  .reset-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .reset-btn:hover { border-color: var(--red); color: var(--red); }
+
+  /* Save indicator */
+  .save-indicator {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--green);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .save-indicator.show { opacity: 1; }
+
+  @media (max-width: 600px) {
+    .container { padding: 12px; }
+    .header h1 { font-size: 1.4rem; }
+    .progress-phases { flex-wrap: wrap; }
+    .phase-chip { flex: 1 1 45%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <h1>🦏 <span>RhinoAssemblyOutliner</span></h1>
+    <p>12-Wochen-Plan – Von MVP zu ersten zahlenden Kunden</p>
+  </div>
+
+  <div class="progress-section">
+    <div class="progress-header">
+      <h3>Gesamtfortschritt</h3>
+      <div class="progress-stats">
+        <strong id="completedCount">0</strong> / <span id="totalCount">0</span> Tasks erledigt
+      </div>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+    </div>
+    <div class="progress-phases" id="phaseChips"></div>
+  </div>
+
+  <div id="phases"></div>
+
+  <div class="goals">
+    <h3>🎯 Meilensteine</h3>
+    <div class="goal-row">
+      <span class="goal-label">Woche 4</span>
+      <span class="goal-value">MVP fertig, 5 Beta-Tester</span>
+    </div>
+    <div class="goal-row">
+      <span class="goal-label">Woche 6</span>
+      <span class="goal-value">Preis validiert (3+ "würde kaufen")</span>
+    </div>
+    <div class="goal-row">
+      <span class="goal-label">Woche 10</span>
+      <span class="goal-value">Live auf Food4Rhino</span>
+    </div>
+    <div class="goal-row">
+      <span class="goal-label">Woche 12</span>
+      <span class="goal-value highlight">10 Kunden, €500-800 Revenue</span>
+    </div>
+  </div>
+
+  <div class="global-notes">
+    <h3>📝 Allgemeine Notizen</h3>
+    <textarea id="globalNotes" placeholder="Ideen, Gedanken, Links, nächste Schritte..."></textarea>
+  </div>
+
+  <div class="footer">
+    <button class="reset-btn" onclick="resetAll()">🔄 Alles zurücksetzen</button>
+    <p style="margin-top: 12px;">Erstellt von <a href="#">Sentinel</a> – Daten werden lokal im Browser gespeichert</p>
+  </div>
+</div>
+
+<div class="save-indicator" id="saveIndicator">✓ Gespeichert</div>
+
+<script>
+const STORAGE_KEY = 'rhino-outliner-plan';
+
+const planData = [
+  {
+    id: 'phase1',
+    title: 'MVP fertigstellen',
+    badge: 'PHASE 1',
+    badgeClass: 'p1',
+    weeks: [
+      {
+        label: 'Woche 1-2: Core Features',
+        tasks: [
+          'Document Mode funktioniert stabil',
+          'Assembly Mode mit Root-Selection',
+          'Expand/Collapse Hierarchie',
+          'Basic Context Menu (Select in Viewport, Zoom to)',
+          'Icon/Branding erstellen'
+        ]
+      },
+      {
+        label: 'Woche 3-4: Polish & Beta-Ready',
+        tasks: [
+          'Eto.Forms UI sauber',
+          'Edge Cases (leere Docs, nested Blocks, etc.)',
+          'Rhino 8 Installer (.yak Package)',
+          '5-10 Beta-Tester rekrutieren (Rhino Forum, LinkedIn)',
+          'Feedback einarbeiten'
+        ]
+      }
+    ],
+    deliverable: 'Funktionierendes Plugin, 5+ Beta-Tester'
+  },
+  {
+    id: 'phase2',
+    title: 'Validierung & Pricing',
+    badge: 'PHASE 2',
+    badgeClass: 'p2',
+    weeks: [
+      {
+        label: 'Woche 5: Beta-Feedback',
+        tasks: [
+          '1:1 Calls mit Beta-Testern (15 min each)',
+          'Fragen: "Wie oft würdest du das nutzen?"',
+          'Fragen: "Was fehlt noch?"',
+          'Fragen: "Würdest du €79 dafür zahlen?"',
+          'NPS Score sammeln'
+        ]
+      },
+      {
+        label: 'Woche 6: Pricing-Strategie',
+        tasks: [
+          'Preispunkte testen: €49 / €79 / €99',
+          'Lizenzmodell entscheiden: Einmalkauf vs. Subscription',
+          'Empfehlung umsetzen: €79 Einmalkauf + €29/Jahr Updates'
+        ]
+      }
+    ],
+    deliverable: 'Validierter Preis, Feature-Roadmap'
+  },
+  {
+    id: 'phase3',
+    title: 'Launch & Marketing',
+    badge: 'PHASE 3',
+    badgeClass: 'p3',
+    weeks: [
+      {
+        label: 'Woche 7-8: Launch-Vorbereitung',
+        tasks: [
+          'Landing Page erstellen (simple, 1 Seite)',
+          '2-Min Demo Video aufnehmen',
+          'Food4Rhino Listing vorbereiten',
+          'Payment Setup (Gumroad oder Paddle)',
+          'License Key System einrichten'
+        ]
+      },
+      {
+        label: 'Woche 9: Soft Launch',
+        tasks: [
+          'Food4Rhino publizieren',
+          'Rhino Forum Post (Show & Tell)',
+          'LinkedIn Post',
+          'Beta-Tester um Reviews bitten'
+        ]
+      },
+      {
+        label: 'Woche 10: Push',
+        tasks: [
+          'Grasshopper/Rhino Discord',
+          'Reddit r/rhino, r/cad',
+          'Direct Outreach: 10 Architektur/Engineering-Büros'
+        ]
+      }
+    ],
+    deliverable: 'Live Produkt, erste Verkäufe'
+  },
+  {
+    id: 'phase4',
+    title: 'Iterate & Scale',
+    badge: 'PHASE 4',
+    badgeClass: 'p4',
+    weeks: [
+      {
+        label: 'Woche 11-12: Feedback Loop',
+        tasks: [
+          'Support-Anfragen auswerten → Feature-Ideen',
+          'Erste Reviews auswerten',
+          'Quick Wins implementieren',
+          'V1.1 Release',
+          'Metriken tracken (Downloads, Conversion, MRR)',
+          'Entscheidung: Bootstrapped weitermachen oder Funding?'
+        ]
+      }
+    ],
+    deliverable: '10 zahlende Kunden, €500-800 Revenue'
+  }
+];
+
+// State
+let state = loadState();
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  return { tasks: {}, notes: {}, globalNotes: '', openPhases: { phase1: true } };
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  showSaveIndicator();
+}
+
+function showSaveIndicator() {
+  const el = document.getElementById('saveIndicator');
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 1200);
+}
+
+function getTaskId(phaseId, weekIdx, taskIdx) {
+  return `${phaseId}-w${weekIdx}-t${taskIdx}`;
+}
+
+function isTaskDone(taskId) {
+  return !!state.tasks[taskId];
+}
+
+function toggleTask(taskId) {
+  state.tasks[taskId] = !state.tasks[taskId];
+  saveState();
+  render();
+}
+
+function getPhaseStats(phase) {
+  let total = 0, done = 0;
+  phase.weeks.forEach((week, wi) => {
+    week.tasks.forEach((_, ti) => {
+      total++;
+      if (isTaskDone(getTaskId(phase.id, wi, ti))) done++;
+    });
+  });
+  return { total, done };
+}
+
+function getTotalStats() {
+  let total = 0, done = 0;
+  planData.forEach(phase => {
+    const s = getPhaseStats(phase);
+    total += s.total;
+    done += s.done;
+  });
+  return { total, done };
+}
+
+function togglePhase(phaseId) {
+  state.openPhases[phaseId] = !state.openPhases[phaseId];
+  saveState();
+  render();
+}
+
+function render() {
+  const totalStats = getTotalStats();
+  document.getElementById('completedCount').textContent = totalStats.done;
+  document.getElementById('totalCount').textContent = totalStats.total;
+  const pct = totalStats.total > 0 ? (totalStats.done / totalStats.total * 100) : 0;
+  document.getElementById('progressFill').style.width = pct.toFixed(1) + '%';
+
+  // Phase chips
+  const chipsEl = document.getElementById('phaseChips');
+  chipsEl.innerHTML = planData.map((phase, i) => {
+    const stats = getPhaseStats(phase);
+    const isComplete = stats.done === stats.total && stats.total > 0;
+    const isActive = state.openPhases[phase.id];
+    const cls = isComplete ? 'completed' : (isActive ? 'active' : '');
+    return `<div class="phase-chip ${cls}" onclick="togglePhase('${phase.id}')">
+      Phase ${i+1}<br>${stats.done}/${stats.total}
+    </div>`;
+  }).join('');
+
+  // Phases
+  const phasesEl = document.getElementById('phases');
+  phasesEl.innerHTML = planData.map((phase) => {
+    const stats = getPhaseStats(phase);
+    const isOpen = state.openPhases[phase.id];
+    const isDone = stats.done === stats.total && stats.total > 0;
+
+    const weeksHtml = phase.weeks.map((week, wi) => {
+      const tasksHtml = week.tasks.map((task, ti) => {
+        const taskId = getTaskId(phase.id, wi, ti);
+        const done = isTaskDone(taskId);
+        return `<div class="task ${done ? 'completed' : ''}">
+          <input type="checkbox" ${done ? 'checked' : ''} onchange="toggleTask('${taskId}')">
+          <span class="task-text">${task}</span>
+        </div>`;
+      }).join('');
+
+      return `<div class="week-group">
+        <div class="week-label">${week.label}</div>
+        ${tasksHtml}
+      </div>`;
+    }).join('');
+
+    const noteKey = phase.id;
+    const noteVal = state.notes[noteKey] || '';
+
+    return `<div class="phase">
+      <div class="phase-header" onclick="togglePhase('${phase.id}')">
+        <div class="phase-title">
+          <h2>${phase.title}</h2>
+          <span class="phase-badge ${phase.badgeClass}">${phase.badge}</span>
+        </div>
+        <div class="phase-meta">
+          <span class="phase-count ${isDone ? 'done' : ''}">${stats.done}/${stats.total}</span>
+          <span class="chevron ${isOpen ? 'open' : ''}">▼</span>
+        </div>
+      </div>
+      <div class="phase-body ${isOpen ? 'open' : ''}">
+        ${weeksHtml}
+        <div class="deliverable">
+          <strong>📦 Deliverable:</strong> ${phase.deliverable}
+        </div>
+        <div class="notes-section">
+          <div class="notes-label">📝 Notizen zu ${phase.title}</div>
+          <textarea class="notes-area"
+            placeholder="Notizen, Links, Erkenntnisse..."
+            oninput="updateNote('${noteKey}', this.value)"
+          >${noteVal}</textarea>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Global notes
+  document.getElementById('globalNotes').value = state.globalNotes || '';
+}
+
+function updateNote(key, value) {
+  state.notes[key] = value;
+  saveState();
+}
+
+document.getElementById('globalNotes').addEventListener('input', function() {
+  state.globalNotes = this.value;
+  saveState();
+});
+
+function resetAll() {
+  if (confirm('Wirklich alles zurücksetzen? Alle Tasks und Notizen werden gelöscht.')) {
+    localStorage.removeItem(STORAGE_KEY);
+    state = { tasks: {}, notes: {}, globalNotes: '', openPhases: { phase1: true } };
+    render();
+  }
+}
+
+// Init
+render();
+</script>
+</body>
+</html>

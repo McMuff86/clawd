@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Graph</title>
+<script src="https://unpkg.com/3d-force-graph@1"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* ---- Search bar ---- */
+  #search-bar {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  #search-input {
+    width: 320px;
+    padding: 10px 16px;
+    border-radius: 24px;
+    border: 1px solid #333;
+    background: rgba(20, 20, 30, 0.9);
+    color: #e0e0e0;
+    font-size: 14px;
+    backdrop-filter: blur(12px);
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #search-input:focus { border-color: #6c7aff; }
+  #search-input::placeholder { color: #666; }
+
+  /* ---- Filter chips ---- */
+  #filter-bar {
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .chip {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid #333;
+    background: rgba(20, 20, 30, 0.85);
+    backdrop-filter: blur(8px);
+    color: #aaa;
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .chip.active { color: #fff; border-color: currentColor; }
+  .chip:hover { opacity: 0.85; }
+
+  /* ---- Detail panel ---- */
+  #detail-panel {
+    position: fixed;
+    top: 0; right: -380px;
+    width: 380px;
+    height: 100vh;
+    background: rgba(12, 12, 20, 0.95);
+    backdrop-filter: blur(16px);
+    border-left: 1px solid #222;
+    z-index: 200;
+    overflow-y: auto;
+    transition: right 0.3s ease;
+    padding: 24px;
+  }
+  #detail-panel.open { right: 0; }
+  #detail-close {
+    position: absolute;
+    top: 12px; right: 16px;
+    background: none; border: none;
+    color: #888; font-size: 22px;
+    cursor: pointer;
+  }
+  #detail-close:hover { color: #fff; }
+
+  .detail-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: #fff;
+    word-break: break-word;
+  }
+  .detail-path {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 16px;
+    word-break: break-all;
+  }
+  .detail-section {
+    margin-bottom: 14px;
+  }
+  .detail-section h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin-bottom: 6px;
+  }
+  .detail-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    margin: 2px 3px 2px 0;
+    border-radius: 8px;
+    font-size: 11px;
+    background: rgba(255,255,255,0.07);
+    color: #ccc;
+  }
+  .detail-connection {
+    padding: 6px 0;
+    border-bottom: 1px solid #1a1a2a;
+    font-size: 13px;
+    cursor: pointer;
+    color: #aab;
+  }
+  .detail-connection:hover { color: #fff; }
+  .detail-connection .conn-type {
+    font-size: 10px;
+    color: #666;
+    margin-left: 6px;
+  }
+
+  /* ---- Tooltip ---- */
+  #tooltip {
+    position: fixed;
+    padding: 10px 14px;
+    background: rgba(15, 15, 25, 0.95);
+    border: 1px solid #333;
+    border-radius: 8px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 300;
+    max-width: 300px;
+    display: none;
+    backdrop-filter: blur(8px);
+  }
+  #tooltip .tt-title { font-weight: 700; margin-bottom: 4px; color: #fff; }
+  #tooltip .tt-type { font-size: 10px; color: #888; margin-bottom: 6px; }
+  #tooltip .tt-kw { font-size: 11px; color: #aaa; }
+
+  /* ---- Stats bar ---- */
+  #stats-bar {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    font-size: 12px;
+    color: #555;
+    background: rgba(10,10,15,0.8);
+    padding: 6px 18px;
+    border-radius: 16px;
+    backdrop-filter: blur(8px);
+    border: 1px solid #1a1a2a;
+  }
+
+  /* ---- Legend ---- */
+  #legend {
+    position: fixed;
+    bottom: 48px;
+    left: 16px;
+    z-index: 100;
+    font-size: 11px;
+    color: #666;
+    background: rgba(10,10,15,0.8);
+    padding: 10px 14px;
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+    border: 1px solid #1a1a2a;
+    line-height: 1.8;
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+
+  /* ---- Graph container ---- */
+  #graph { width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+
+<!-- Search -->
+<div id="search-bar">
+  <input id="search-input" type="text" placeholder="Search files, keywords, mentions..." autocomplete="off">
+</div>
+
+<!-- Type filters -->
+<div id="filter-bar"></div>
+
+<!-- Tooltip -->
+<div id="tooltip">
+  <div class="tt-title"></div>
+  <div class="tt-type"></div>
+  <div class="tt-kw"></div>
+</div>
+
+<!-- Detail panel -->
+<div id="detail-panel">
+  <button id="detail-close">&times;</button>
+  <div id="detail-content"></div>
+</div>
+
+<!-- Stats -->
+<div id="stats-bar"></div>
+
+<!-- Legend -->
+<div id="legend">
+  <div><span class="legend-dot" style="background:#4a90d9"></span>Daily Note</div>
+  <div><span class="legend-dot" style="background:#50c878"></span>Memory</div>
+  <div><span class="legend-dot" style="background:#f5a623"></span>Task</div>
+  <div><span class="legend-dot" style="background:#9b59b6"></span>Project</div>
+  <div><span class="legend-dot" style="background:#3498db"></span>Knowledge</div>
+  <div><span class="legend-dot" style="background:#95a5a6"></span>Config</div>
+  <div><span class="legend-dot" style="background:#e67e73"></span>Skill</div>
+</div>
+
+<!-- Graph container -->
+<div id="graph"></div>
+
+<!-- Graph data: either embedded or from a script tag -->
+<script id="graph-data" type="application/json">null</script>
+<script>
+const GRAPH_DATA = /* INJECT_DATA */ null;
+</script>
+
+<script>
+(function() {
+  // ---- Color scheme ----
+  const TYPE_COLORS = {
+    'daily-note': '#4a90d9',
+    'memory':     '#50c878',
+    'task':       '#f5a623',
+    'project':    '#9b59b6',
+    'knowledge':  '#3498db',
+    'config':     '#95a5a6',
+    'skill':      '#e67e73',
+    'other':      '#777777',
+  };
+
+  const EDGE_COLORS = {
+    'wiki-link': 'rgba(108, 122, 255, 0.6)',
+    'keyword':   'rgba(80, 200, 120, 0.25)',
+    'mention':   'rgba(245, 166, 35, 0.35)',
+  };
+
+  // ---- Load data ----
+  let graphData = GRAPH_DATA;
+  if (!graphData) {
+    try {
+      const el = document.getElementById('graph-data');
+      if (el) graphData = JSON.parse(el.textContent);
+    } catch(e) {}
+  }
+  if (!graphData || !graphData.nodes) {
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888;font-size:18px;">No graph data found. Run build-graph.py first.</div>';
+    return;
+  }
+
+  // ---- Precompute ----
+  const nodeMap = {};
+  graphData.nodes.forEach(n => {
+    n._connections = 0;
+    nodeMap[n.id] = n;
+  });
+  graphData.edges.forEach(e => {
+    if (nodeMap[e.source]) nodeMap[e.source]._connections++;
+    if (nodeMap[e.target]) nodeMap[e.target]._connections++;
+  });
+
+  // ---- Stats bar ----
+  const statsEl = document.getElementById('stats-bar');
+  statsEl.textContent = `${graphData.stats.totalNodes} Files · ${graphData.stats.totalEdges} Connections · Scanned ${new Date(graphData.stats.scannedAt).toLocaleString()}`;
+
+  // ---- Filter chips ----
+  const types = [...new Set(graphData.nodes.map(n => n.type))].sort();
+  const activeFilters = new Set(types);
+  const filterBar = document.getElementById('filter-bar');
+
+  types.forEach(t => {
+    const chip = document.createElement('div');
+    chip.className = 'chip active';
+    chip.textContent = t;
+    chip.style.color = TYPE_COLORS[t] || '#aaa';
+    chip.style.borderColor = TYPE_COLORS[t] || '#333';
+    chip.addEventListener('click', () => {
+      if (activeFilters.has(t)) {
+        activeFilters.delete(t);
+        chip.classList.remove('active');
+        chip.style.borderColor = '#333';
+      } else {
+        activeFilters.add(t);
+        chip.classList.add('active');
+        chip.style.borderColor = TYPE_COLORS[t] || '#333';
+      }
+      applyFilters();
+    });
+    filterBar.appendChild(chip);
+  });
+
+  // ---- Build graph ----
+  const container = document.getElementById('graph');
+  const Graph = ForceGraph3D()(container)
+    .graphData({ nodes: [...graphData.nodes], links: graphData.edges.map(e => ({...e})) })
+    .backgroundColor('#0a0a0f')
+    .nodeColor(n => {
+      if (n._dimmed) return 'rgba(60,60,70,0.3)';
+      if (n._highlighted) return '#fff';
+      return TYPE_COLORS[n.type] || '#777';
+    })
+    .nodeVal(n => {
+      const connSize = Math.max(1, (n._connections || 0));
+      const fileSize = Math.log2(Math.max(n.size, 100)) / 3;
+      return connSize * 0.6 + fileSize * 0.4;
+    })
+    .nodeLabel('')  // We use custom tooltip
+    .linkColor(l => EDGE_COLORS[l.type] || 'rgba(100,100,120,0.2)')
+    .linkWidth(l => {
+      if (l.type === 'wiki-link') return 1.5;
+      return 0.5;
+    })
+    .linkOpacity(0.6)
+    .linkDirectionalParticles(l => l.type === 'wiki-link' ? 2 : 0)
+    .linkDirectionalParticleWidth(1.5)
+    .linkDirectionalParticleSpeed(0.005)
+    .linkDirectionalParticleColor(l => EDGE_COLORS[l.type] || '#555')
+    .onNodeHover(handleHover)
+    .onNodeClick(handleClick)
+    .warmupTicks(80)
+    .cooldownTime(3000);
+
+  // Adjust forces
+  Graph.d3Force('charge').strength(-120);
+  Graph.d3Force('link').distance(l => {
+    if (l.type === 'wiki-link') return 40;
+    if (l.type === 'mention') return 70;
+    return 100;
+  });
+
+  // ---- Tooltip ----
+  const tooltip = document.getElementById('tooltip');
+  const ttTitle = tooltip.querySelector('.tt-title');
+  const ttType = tooltip.querySelector('.tt-type');
+  const ttKw = tooltip.querySelector('.tt-kw');
+
+  function handleHover(node, prevNode) {
+    container.style.cursor = node ? 'pointer' : 'default';
+    if (node) {
+      ttTitle.textContent = node.label;
+      ttType.textContent = `${node.type} · ${formatBytes(node.size)}`;
+      const parts = [];
+      if (node.keywords?.length) parts.push('🏷 ' + node.keywords.slice(0, 6).join(', '));
+      if (node.mentions?.length) parts.push('👤 ' + node.mentions.join(', '));
+      ttKw.textContent = parts.join('  ·  ');
+      tooltip.style.display = 'block';
+    } else {
+      tooltip.style.display = 'none';
+    }
+  }
+
+  document.addEventListener('mousemove', e => {
+    if (tooltip.style.display === 'block') {
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY + 14) + 'px';
+    }
+  });
+
+  // ---- Detail panel ----
+  const panel = document.getElementById('detail-panel');
+  const detailContent = document.getElementById('detail-content');
+  document.getElementById('detail-close').addEventListener('click', () => {
+    panel.classList.remove('open');
+  });
+
+  function handleClick(node) {
+    if (!node) return;
+
+    // Find connected nodes
+    const connections = [];
+    graphData.edges.forEach(e => {
+      if (e.source === node.id || (typeof e.source === 'object' && e.source.id === node.id)) {
+        const targetId = typeof e.target === 'object' ? e.target.id : e.target;
+        connections.push({ id: targetId, type: e.type, weight: e.weight });
+      }
+      if (e.target === node.id || (typeof e.target === 'object' && e.target.id === node.id)) {
+        const sourceId = typeof e.source === 'object' ? e.source.id : e.source;
+        connections.push({ id: sourceId, type: e.type, weight: e.weight });
+      }
+    });
+
+    let html = `
+      <div class="detail-title">${escHtml(node.label)}</div>
+      <div class="detail-path">${escHtml(node.id)}</div>
+
+      <div class="detail-section">
+        <h3>Type</h3>
+        <span class="detail-badge" style="background:${TYPE_COLORS[node.type]}33;color:${TYPE_COLORS[node.type]}">${node.type}</span>
+        <span class="detail-badge">${formatBytes(node.size)}</span>
+        <span class="detail-badge">${node._connections || 0} connections</span>
+      </div>
+    `;
+
+    if (node.keywords?.length) {
+      html += `<div class="detail-section"><h3>Keywords</h3>`;
+      node.keywords.forEach(k => { html += `<span class="detail-badge">${escHtml(k)}</span>`; });
+      html += `</div>`;
+    }
+
+    if (node.mentions?.length) {
+      html += `<div class="detail-section"><h3>Mentions</h3>`;
+      node.mentions.forEach(m => { html += `<span class="detail-badge" style="background:rgba(245,166,35,0.15);color:#f5a623">${escHtml(m)}</span>`; });
+      html += `</div>`;
+    }
+
+    if (connections.length) {
+      html += `<div class="detail-section"><h3>Connected Files (${connections.length})</h3>`;
+      connections.sort((a, b) => b.weight - a.weight);
+      connections.forEach(c => {
+        const targetNode = nodeMap[c.id];
+        const label = targetNode ? targetNode.label : c.id;
+        html += `<div class="detail-connection" data-id="${escHtml(c.id)}">
+          <span style="color:${TYPE_COLORS[targetNode?.type] || '#777'}">●</span>
+          ${escHtml(label)}
+          <span class="conn-type">${c.type} (${(c.weight * 100).toFixed(0)}%)</span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    html += `<div class="detail-section"><h3>Last Modified</h3><div style="font-size:13px;color:#999">${new Date(node.lastModified).toLocaleString()}</div></div>`;
+
+    detailContent.innerHTML = html;
+    panel.classList.add('open');
+
+    // Make connections clickable
+    detailContent.querySelectorAll('.detail-connection').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-id');
+        const target = graphData.nodes.find(n => n.id === id);
+        if (target) {
+          Graph.centerAt(target.x, target.y, 500);
+          Graph.cameraPosition({ x: target.x, y: target.y, z: target.z + 200 }, target, 500);
+          setTimeout(() => handleClick(target), 550);
+        }
+      });
+    });
+
+    // Center camera on clicked node
+    Graph.cameraPosition(
+      { x: node.x, y: node.y, z: node.z + 180 },
+      node,
+      500
+    );
+  }
+
+  // ---- Search ----
+  const searchInput = document.getElementById('search-input');
+  let searchTimeout;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(applyFilters, 150);
+  });
+
+  // ---- Filter logic ----
+  function applyFilters() {
+    const q = searchInput.value.toLowerCase().trim();
+
+    graphData.nodes.forEach(n => {
+      const typeVisible = activeFilters.has(n.type);
+      let matchesSearch = true;
+
+      if (q) {
+        matchesSearch =
+          n.id.toLowerCase().includes(q) ||
+          n.label.toLowerCase().includes(q) ||
+          (n.keywords || []).some(k => k.includes(q)) ||
+          (n.mentions || []).some(m => m.includes(q));
+      }
+
+      n._dimmed = !(typeVisible && matchesSearch);
+      n._highlighted = (q && matchesSearch && typeVisible);
+    });
+
+    Graph.nodeColor(Graph.nodeColor());  // Trigger re-render
+  }
+
+  // ---- Helpers ----
+  function formatBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ---- Keyboard shortcuts ----
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      panel.classList.remove('open');
+      searchInput.value = '';
+      applyFilters();
+    }
+    if (e.key === '/' && document.activeElement !== searchInput) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
