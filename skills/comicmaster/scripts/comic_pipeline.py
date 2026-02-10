@@ -6,6 +6,8 @@ Takes a story_plan.json and produces finished comic pages.
 Usage:
     python comic_pipeline.py story_plan.json [--output DIR] [--preset NAME]
     python comic_pipeline.py story_plan.json --skip-generate  # layout only (panels exist)
+    python comic_pipeline.py story_plan.json --color-grade noir
+    python comic_pipeline.py story_plan.json --skip-quality
 """
 
 import argparse
@@ -22,11 +24,24 @@ sys.path.insert(0, str(Path(__file__).parent))
 from speech_bubbles import add_bubbles, POSITION_HINTS
 from page_layout import compose_page, load_template, auto_layout
 from export import export_pdf, export_pages_png
+from quality_tracker import score_batch
+from color_grading import (
+    COLOR_GRADES, grade_all_panels, apply_color_grade,
+    grade_panel_for_pipeline, list_grades,
+)
 
 # Lazy import panel_generator — only needed when generating panels (not for --skip-generate)
 # This avoids importing comfy_client which tries to connect to ComfyUI at import time.
 generate_all_panels = None
 generate_character_ref = None
+
+# Style → default color grade mapping
+STYLE_COLOR_GRADE_MAP = {
+    "noir": "noir",
+    "cyberpunk": "cyberpunk",
+    # manga: skip by default (use manga_bw only if explicitly requested)
+    # other styles: no auto-grade
+}
 
 def _ensure_panel_generator():
     global generate_all_panels, generate_character_ref
@@ -41,6 +56,8 @@ def run_pipeline(story_plan: dict, output_dir: str,
                  panel_width: int = 768, panel_height: int = 768,
                  skip_generate: bool = False,
                  skip_bubbles: bool = False,
+                 skip_quality: bool = False,
+                 color_grade: str = None,
                  export_formats: list = None) -> dict:
     """
     Run the full comic pipeline.
@@ -48,6 +65,8 @@ def run_pipeline(story_plan: dict, output_dir: str,
     Stages:
         1. Validate & prepare
         2. Generate panels (ComfyUI)
+        1.5q. Quality report (after generation, optional)
+        1.5. Color grading (after generation, before bubbles, optional)
         3. Add speech bubbles (PIL)
         4. Compose pages (PIL)
         5. Export (PNG/PDF/CBZ)
@@ -159,6 +178,83 @@ def run_pipeline(story_plan: dict, output_dir: str,
         )
         if failed:
             print(f"\n⚠️  {len(failed)} panels failed: {[f[0] for f in failed]}")
+
+    # -----------------------------------------------------------
+    # STAGE 1.5q: Quality Report (auto, unless --skip-quality)
+    # -----------------------------------------------------------
+    quality_report = None
+
+    if not skip_quality and panel_results:
+        print("\n📊 Stage 1.5q: Quality analysis...")
+        try:
+            batch_score = score_batch(
+                panels_dir,
+                run_id=title,
+                composition=True,
+                sequence=True,
+            )
+            quality_report = {
+                "avg_score": batch_score.mean_score,
+                "best_panel": batch_score.best_panel,
+                "worst_panel": batch_score.worst_panel,
+                "panel_count": batch_score.panel_count,
+                "mean_sharpness": batch_score.mean_sharpness,
+                "mean_contrast": batch_score.mean_contrast,
+                "mean_composition": batch_score.mean_composition_score,
+            }
+            # Save quality_scores.json
+            from dataclasses import asdict
+            scores_path = os.path.join(output_dir, "quality_scores.json")
+            with open(scores_path, "w") as f:
+                json.dump(asdict(batch_score), f, indent=2, ensure_ascii=False)
+
+            # Print summary
+            print(f"   Avg Score: {batch_score.mean_score:.1f}/100")
+            print(f"   Best:  {batch_score.best_panel} ({batch_score.max_score:.1f})")
+            print(f"   Worst: {batch_score.worst_panel} ({batch_score.min_score:.1f})")
+            if batch_score.mean_composition_score is not None:
+                print(f"   Composition: {batch_score.mean_composition_score:.1f}/100")
+            if batch_score.sequence_analysis:
+                seq = batch_score.sequence_analysis
+                print(f"   Sequence: {seq.get('sequence_score', 0):.1f}/100")
+            print(f"   Saved: {scores_path}")
+        except Exception as e:
+            print(f"   ⚠️ Quality analysis failed: {e}")
+    elif skip_quality:
+        print("\n⏭️  Skipping quality analysis (--skip-quality)")
+
+    # -----------------------------------------------------------
+    # STAGE 1.5: Color Grading (optional)
+    # -----------------------------------------------------------
+    # Determine color grade: CLI arg > story plan > style auto-map
+    effective_grade = color_grade
+    if not effective_grade:
+        effective_grade = story_plan.get("color_grade")
+    if not effective_grade:
+        effective_grade = STYLE_COLOR_GRADE_MAP.get(style)
+
+    if effective_grade and panel_results:
+        if effective_grade not in COLOR_GRADES:
+            print(f"\n⚠️  Unknown color grade '{effective_grade}', skipping. "
+                  f"Available: {', '.join(COLOR_GRADES.keys())}")
+        else:
+            print(f"\n🎨 Stage 1.5: Color grading ({effective_grade})...")
+            graded_dir = os.path.join(output_dir, "panels_graded")
+            os.makedirs(graded_dir, exist_ok=True)
+
+            graded_count = 0
+            for pid, result in panel_results.items():
+                panel_path = result["path"]
+                graded_path = os.path.join(graded_dir, f"{pid}.png")
+                try:
+                    apply_color_grade(panel_path, effective_grade, graded_path)
+                    # Update panel_results to point to graded version
+                    panel_results[pid] = {"path": graded_path}
+                    graded_count += 1
+                except Exception as e:
+                    print(f"   ⚠️ {pid}: grading failed: {e}")
+
+            print(f"   Graded {graded_count}/{len(panel_results)} panels → {graded_dir}")
 
     # -----------------------------------------------------------
     # STAGE 2: Add speech bubbles
@@ -325,11 +421,15 @@ def run_pipeline(story_plan: dict, output_dir: str,
     print(f"   Title: {title}")
     print(f"   Panels: {len(panel_results)}/{len(panels)}")
     print(f"   Pages: {len(page_images)}")
+    if effective_grade:
+        print(f"   Color Grade: {effective_grade}")
+    if quality_report:
+        print(f"   Quality: {quality_report['avg_score']:.1f}/100 avg")
     print(f"   Time: {total_time:.1f}s")
     print(f"   Output: {output_dir}")
     print(f"{'='*60}")
 
-    return {
+    result = {
         "title": title,
         "output_dir": output_dir,
         "panel_results": panel_results,
@@ -339,6 +439,11 @@ def run_pipeline(story_plan: dict, output_dir: str,
         "panels_generated": len(panel_results),
         "panels_failed": len(panels) - len(panel_results),
     }
+    if quality_report:
+        result["quality_report"] = quality_report
+    if effective_grade:
+        result["color_grade"] = effective_grade
+    return result
 
 
 # --- CLI ---
@@ -354,6 +459,11 @@ if __name__ == "__main__":
                         help="Skip panel generation (use existing)")
     parser.add_argument("--skip-bubbles", action="store_true",
                         help="Skip speech bubble overlay")
+    parser.add_argument("--skip-quality", action="store_true",
+                        help="Skip automatic quality analysis after panel generation")
+    parser.add_argument("--color-grade", default=None,
+                        help=f"Apply color grade preset before bubbles. "
+                             f"Options: {', '.join(COLOR_GRADES.keys())}")
     parser.add_argument("--formats", default="png,pdf",
                         help="Export formats (comma-separated: png,pdf,cbz)")
 
@@ -375,5 +485,7 @@ if __name__ == "__main__":
         panel_height=args.height,
         skip_generate=args.skip_generate,
         skip_bubbles=args.skip_bubbles,
+        skip_quality=args.skip_quality,
+        color_grade=args.color_grade,
         export_formats=args.formats.split(","),
     )
