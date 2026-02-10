@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 # Add comfyui skill scripts to path
 COMFYUI_SCRIPTS = Path(__file__).parent.parent.parent / "comfyui" / "scripts"
 sys.path.insert(0, str(COMFYUI_SCRIPTS))
@@ -487,6 +489,143 @@ ENVIRONMENT_INTERACTION_MAP = {
 }
 
 
+# --- 180-Degree Rule: Character Position Tags ---
+
+CHARACTER_POSITION_TAGS = {
+    "left": "positioned on the left side of the frame",
+    "right": "positioned on the right side of the frame",
+    "center": "positioned in the center of the frame",
+}
+
+
+def _get_180_degree_rule_tags(panel: dict, characters: list) -> list[str]:
+    """Generate prompt tags enforcing the 180-degree rule for character positions.
+
+    When a panel has ``character_positions`` (set by story planner's 180-degree
+    rule enrichment), this function generates prompt fragments that place each
+    character on the correct side of the frame.
+
+    Only relevant for panels with 2+ characters present.
+
+    Args:
+        panel: Panel dict (may contain ``character_positions``).
+        characters: List of character dicts with 'id' and 'name'.
+
+    Returns:
+        List of prompt tag strings (empty if not applicable).
+    """
+    positions = panel.get("character_positions")
+    if not positions or not isinstance(positions, dict):
+        return []
+
+    chars_present = panel.get("characters_present", [])
+    if len(chars_present) < 2:
+        return []
+
+    char_map = {c["id"]: c for c in characters}
+    tags: list[str] = []
+
+    for char_id, side in positions.items():
+        if char_id not in chars_present:
+            continue
+        char = char_map.get(char_id)
+        if not char:
+            continue
+        char_name = char.get("name", char_id)
+        position_desc = CHARACTER_POSITION_TAGS.get(side, "")
+        if position_desc:
+            tags.append(f"{char_name} {position_desc}")
+
+    return tags
+
+
+# --- Dynamic Camera Angles based on panel type ---
+
+# Maps panel mood/type → camera angle suggestions for prompt enhancement.
+# These are injected as extra composition hints, NOT overriding the panel's
+# camera_angle field (which controls the main CAMERA_ANGLE_TAGS).
+DYNAMIC_CAMERA_ANGLE_MAP: dict[str, dict[str, str]] = {
+    "action": {
+        "angle_hint": "dramatic low angle, looking up at the action, heroic dynamic perspective",
+        "angles": ["worms_eye", "low_angle", "dutch_angle"],
+    },
+    "intense": {
+        "angle_hint": "dramatic low angle, powerful perspective from below",
+        "angles": ["worms_eye", "low_angle"],
+    },
+    "explosive": {
+        "angle_hint": "extreme perspective, bird's eye or worm's eye for maximum drama",
+        "angles": ["birds_eye", "worms_eye"],
+    },
+    "dialogue": {
+        "angle_hint": "eye-level conversational framing, natural perspective",
+        "angles": ["eye_level"],
+    },
+    "establishing": {
+        "angle_hint": "slightly elevated wide angle, establishing overview perspective",
+        "angles": ["high_angle"],
+    },
+    "emotion": {
+        "angle_hint": "slight angle, intimate close-up perspective",
+        "angles": ["eye_level", "low_angle"],
+    },
+}
+
+
+def _get_dynamic_camera_tags(panel: dict) -> list[str]:
+    """Determine dynamic camera angle hints based on panel type and mood.
+
+    Panel types are inferred from mood, action, shot type, and dialogue
+    presence.  The returned tags are *composition hints* that complement
+    (but don't replace) the panel's ``camera_angle`` field.
+
+    Args:
+        panel: Panel dict.
+
+    Returns:
+        List of camera angle hint strings.
+    """
+    tags: list[str] = []
+    mood = panel.get("mood", "neutral").lower()
+    action = panel.get("action", "").lower()
+    shot = panel.get("shot_type", "medium")
+    has_dialogue = bool(panel.get("dialogue"))
+
+    action_keywords = (
+        "fight", "attack", "chase", "explode", "run", "dodge", "punch",
+        "kick", "battle", "combat", "crash", "slam", "throw", "jump",
+    )
+    emotion_keywords = (
+        "sad", "happy", "angry", "scared", "crying", "laughing",
+        "shocked", "horrified", "determined",
+    )
+
+    is_action = any(kw in action or kw in mood for kw in action_keywords)
+    is_establishing = shot in ("wide", "extreme_wide", "long", "extreme_long")
+    is_emotion = (
+        shot in ("close_up", "extreme_close_up", "medium_close_up")
+        and any(kw in mood for kw in emotion_keywords)
+    )
+
+    if is_action:
+        # Action panels: worm's eye or bird's eye for drama
+        cam_info = DYNAMIC_CAMERA_ANGLE_MAP.get("action", {})
+        if "explosive" in mood or "explosive" in action:
+            cam_info = DYNAMIC_CAMERA_ANGLE_MAP.get("explosive", cam_info)
+        tags.append(cam_info.get("angle_hint", ""))
+    elif is_establishing:
+        cam_info = DYNAMIC_CAMERA_ANGLE_MAP.get("establishing", {})
+        tags.append(cam_info.get("angle_hint", ""))
+    elif is_emotion:
+        cam_info = DYNAMIC_CAMERA_ANGLE_MAP.get("emotion", {})
+        tags.append(cam_info.get("angle_hint", ""))
+    elif has_dialogue:
+        cam_info = DYNAMIC_CAMERA_ANGLE_MAP.get("dialogue", {})
+        tags.append(cam_info.get("angle_hint", ""))
+
+    return [t for t in tags if t]
+
+
 def _get_environment_interaction(scene: str, action: str, shot_type: str) -> str | None:
     """Select an environment interaction hint based on scene and action.
 
@@ -742,6 +881,10 @@ def _get_sequential_composition_tags(panel: dict, all_panels: list | None = None
     if panel.get("_is_reveal") or "reveal" in panel.get("action", "").lower():
         tags.append(COMPOSITION_TEMPLATES["reveal"])
 
+    # ── 12. Dynamic Camera Angles ──────────────────────────────────────
+    dynamic_cam_tags = _get_dynamic_camera_tags(panel)
+    tags.extend(dynamic_cam_tags)
+
     return tags
 
 
@@ -767,11 +910,25 @@ def _convert_description_to_tags(description: str) -> str:
 
 
 def _build_costume_string(character: dict) -> str:
-    """Build a costume description string from character's costume_details field.
+    """Build a costume description string for prompt injection (costume locking).
 
-    Returns a string like: "wearing grey hoodie with zipper, dark jeans, black sneakers, with silver watch, red backpack"
-    Returns empty string if no costume_details or all fields are empty.
+    Priority:
+    1. ``character["outfit"]`` — canonical outfit string set during enrichment
+       or explicitly by the user.  Used *verbatim* so every panel prompt
+       contains identical wording (costume locking).
+    2. ``character["costume_details"]`` — structured dict fallback; assembled
+       into a descriptive string.
+
+    Returns a string like:
+        ``"wearing grey hoodie, dark jeans, black sneakers, silver watch"``
+    Returns empty string if no costume information is available.
     """
+    # 1. Prefer explicit outfit string (costume locking)
+    outfit = character.get("outfit")
+    if outfit and isinstance(outfit, str) and outfit.strip():
+        return f"wearing {outfit.strip()}"
+
+    # 2. Fallback: build from costume_details dict
     costume = character.get("costume_details")
     if not costume or not isinstance(costume, dict):
         return ""
@@ -890,6 +1047,11 @@ def build_illustrious_prompt(panel: dict, characters: list, style: str,
     # Character poses
     if panel.get("character_poses"):
         parts.append(_convert_description_to_tags(panel["character_poses"]))
+
+    # 6b. 180-degree rule: character positioning (Illustrious)
+    position_tags = _get_180_degree_rule_tags(panel, characters)
+    if position_tags:
+        parts.append(_convert_description_to_tags(", ".join(position_tags)))
 
     # 7. Action / scene / background
     if panel.get("action"):
@@ -1062,6 +1224,11 @@ def build_panel_prompt(panel: dict, characters: list, style: str,
     # Character poses (global string applied to the whole scene)
     if panel.get("character_poses"):
         parts.append(panel["character_poses"])
+
+    # 6b. 180-degree rule: character positioning (left/right side consistency)
+    position_tags = _get_180_degree_rule_tags(panel, characters)
+    if position_tags:
+        parts.extend(position_tags)
 
     # 7. Lighting — auto-inject based on mood, then fallback to explicit
     mood = panel.get("mood", "")
@@ -1617,6 +1784,91 @@ def generate_character_ref(character: dict, style: str, preset_name: str,
     }
 
 
+def extract_best_face(panel_image_path: str, character: dict,
+                     min_face_size: int = 64,
+                     output_dir: str | None = None) -> str | None:
+    """Extract the best face crop from a generated panel image.
+
+    Uses InsightFace for detection when available, otherwise falls back to a
+    heuristic upper-center crop.  The cropped face is saved as a separate
+    image file that can be used as an additional IPAdapter reference for
+    subsequent panels (face re-injection).
+
+    Args:
+        panel_image_path: Path to the generated panel image.
+        character: Character dict (used for naming the output file).
+        min_face_size: Minimum face bounding box dimension in pixels.
+        output_dir: Directory to save the face crop.  If None, saves next to
+            the panel image.
+
+    Returns:
+        Path to the saved face crop image, or None if no suitable face found.
+    """
+    from PIL import Image as PILImage
+
+    char_id = character.get("id", "unknown")
+
+    if output_dir is None:
+        output_dir = str(Path(panel_image_path).parent)
+    os.makedirs(output_dir, exist_ok=True)
+
+    out_path = os.path.join(output_dir, f"face_crop_{char_id}.png")
+
+    try:
+        img = PILImage.open(panel_image_path).convert("RGB")
+    except Exception:
+        return None
+
+    img_np = np.array(img)
+    face_box = None
+
+    # --- Try InsightFace for precise face detection ---
+    try:
+        from insightface.app import FaceAnalysis
+        app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        app.prepare(ctx_id=-1, det_size=(640, 640))
+        # InsightFace expects BGR
+        faces = app.get(img_np[:, :, ::-1])
+        if faces:
+            # Select largest face
+            largest = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+            x1, y1, x2, y2 = [int(v) for v in largest.bbox]
+            fw, fh = x2 - x1, y2 - y1
+            if fw >= min_face_size and fh >= min_face_size:
+                # Expand crop by 40% for context (hair, ears, chin)
+                expand = 0.4
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                half_w = fw * (1 + expand) / 2
+                half_h = fh * (1 + expand) / 2
+                face_box = (
+                    max(0, int(cx - half_w)),
+                    max(0, int(cy - half_h)),
+                    min(img.width, int(cx + half_w)),
+                    min(img.height, int(cy + half_h)),
+                )
+    except Exception:
+        pass  # InsightFace not available
+
+    # --- Fallback: heuristic upper-center crop ---
+    if face_box is None:
+        w, h = img.size
+        # Assume face is in upper-center area of the panel
+        crop_size = min(w, h) // 3
+        if crop_size < min_face_size:
+            return None
+        left = (w - crop_size) // 2
+        top = h // 8
+        face_box = (left, top, left + crop_size, top + crop_size)
+
+    # Crop and save
+    face_crop = img.crop(face_box)
+    # Resize to a standard size for consistent IPAdapter input
+    face_crop = face_crop.resize((512, 512), PILImage.LANCZOS)
+    face_crop.save(out_path)
+
+    return out_path
+
+
 def generate_panel(panel: dict, characters: list, style: str,
                    preset_name: str, output_dir: str,
                    char_refs: dict = None,
@@ -1703,8 +1955,19 @@ def generate_panel(panel: dict, characters: list, style: str,
                 if fname:
                     matching_refs.append((char_id, ref_info, fname))
 
-        if len(matching_refs) >= 2:
-            # Multi-character IPAdapter path
+        # --- Face crop re-injection ---
+        # For each character with a face crop, add it as an additional
+        # IPAdapter reference.  Face crops get PLUS FACE preset and a
+        # moderate weight to reinforce facial consistency.
+        face_crop_refs: list[tuple[str, str]] = []  # (char_id, face_filename)
+        for char_id in panel["characters_present"]:
+            if char_id in char_refs:
+                face_fname = char_refs[char_id].get("face_crop_filename")
+                if face_fname:
+                    face_crop_refs.append((char_id, face_fname))
+
+        if len(matching_refs) >= 2 or (len(matching_refs) == 1 and face_crop_refs):
+            # Multi-character or single-character-with-face-crop IPAdapter path
             use_multi_ipadapter = True
             use_ipadapter = True
 
@@ -1725,8 +1988,21 @@ def generate_panel(panel: dict, characters: list, style: str,
                     "char_id": char_id,
                 })
 
+            # Append face crops as additional IPAdapter references
+            # Face crops use PLUS FACE preset and a weight ~60% of base
+            # to reinforce facial features without overpowering the scene.
+            for char_id, face_fname in face_crop_refs:
+                face_weight = round(base_weight * 0.6, 2)
+                face_weight = max(0.2, min(0.7, face_weight))
+                multi_char_refs_list.append({
+                    "filename": face_fname,
+                    "weight": face_weight,
+                    "preset": "PLUS FACE (portraits)",
+                    "char_id": f"{char_id}_face",
+                })
+
         elif len(matching_refs) == 1:
-            # Single-character IPAdapter (original path)
+            # Single-character IPAdapter (original path, no face crop)
             use_ipadapter = True
             char_id, ref_info, fname = matching_refs[0]
             ref_filename = fname
@@ -1785,8 +2061,16 @@ def generate_panel(panel: dict, characters: list, style: str,
     # Only set up face validation if we have character refs with paths
     if char_refs and panel.get("characters_present"):
         try:
-            from face_validator import FaceValidator, MAX_RETRIES as FV_MAX_RETRIES
-            face_validator = FaceValidator()
+            from face_validator import (
+                FaceValidator,
+                MAX_RETRIES as FV_MAX_RETRIES,
+                build_character_thresholds,
+            )
+            char_thresholds, skip_chars = build_character_thresholds(characters)
+            face_validator = FaceValidator(
+                character_thresholds=char_thresholds,
+                skip_characters=skip_chars,
+            )
             face_max_retries = FV_MAX_RETRIES
         except ImportError:
             pass  # face_validator not available, skip validation
@@ -1977,6 +2261,14 @@ def generate_all_panels(story_plan: dict, output_dir: str,
     batch_start = time.time()
     current_group = None
 
+    # --- Face crop re-injection tracking ---
+    # Track which characters have had a face crop extracted already.
+    # After the FIRST panel of each character, we extract their face and
+    # add it as an additional IPAdapter reference for all subsequent panels.
+    chars_with_face_crop: set[str] = set()
+    face_crops_dir = os.path.join(output_dir, "face_crops")
+    char_map = {c["id"]: c for c in characters}
+
     for i, panel in enumerate(generation_order):
         panel_id = panel.get("id", f"panel_{i+1:02d}")
 
@@ -2018,6 +2310,29 @@ def generate_all_panels(story_plan: dict, output_dir: str,
                 ipa_tag = " 🔗" if result.get("ipadapter") else ""
                 lora_tag = " 🔧" if result.get("loras") else ""
                 print(f"✅ ({result['duration_s']}s){ipa_tag}{lora_tag}")
+
+                # --- Face crop re-injection ---
+                # After the first successful panel for each character,
+                # extract a face crop and add it to char_refs for future panels.
+                if char_refs and panel.get("characters_present"):
+                    for cid in panel["characters_present"]:
+                        if cid not in chars_with_face_crop and cid in char_refs:
+                            try:
+                                char = char_map.get(cid, {"id": cid})
+                                face_path = extract_best_face(
+                                    result["path"], char,
+                                    output_dir=face_crops_dir,
+                                )
+                                if face_path:
+                                    # Upload face crop to ComfyUI and add to char refs
+                                    face_filename = upload_image(face_path)
+                                    char_refs[cid]["face_crop_path"] = face_path
+                                    char_refs[cid]["face_crop_filename"] = face_filename
+                                    chars_with_face_crop.add(cid)
+                                    print(f"      🔍 Face crop extracted for {cid}: {face_filename}")
+                            except Exception as face_err:
+                                # Non-fatal: face crop is a bonus, not required
+                                pass
                 break
             except Exception as e:
                 last_error = str(e)

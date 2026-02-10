@@ -18,6 +18,18 @@ Bubble types: speech, thought, shout, whisper, narration, caption,
 - Balloon tails: curved Bézier, pointing toward character mouth
 - Text is NEVER truncated — balloon resizes to fit
 
+=== Z-Pattern Reading Order ===
+- Bubbles placed in correct reading order: top-left → top-right →
+  bottom-left → bottom-right (Z-pattern)
+- First speaker in dialogue always has bubble higher and further left
+- Bubble placement avoids covering important image areas (faces)
+
+=== Balloon Tails ===
+- Tails point toward speaker's MOUTH (not body centre)
+- Smooth tapered Bézier curves (wide base, narrow tip)
+- Tail ends at ~50-60% of distance between bubble and speaker
+- Automatic mouth position estimation from speaker_position
+
 === SFX Enhancements ===
 - Perspective-matched SFX: flat, radial, curved, impact styles
 - Art-integrated rendering: semi-transparency, drop shadows, color matching
@@ -547,6 +559,342 @@ def _is_duplicate(panel_id: str, text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Z-Pattern Reading Order
+# ---------------------------------------------------------------------------
+
+# Bubble types that are exempt from Z-pattern reordering
+# (SFX, captions, narration boxes have fixed positions)
+_Z_PATTERN_EXEMPT_TYPES = {"sfx", "caption", "narration"}
+
+
+def _z_pattern_sort_key(bubble: dict) -> tuple[int, float, float]:
+    """Compute a sort key for Z-pattern reading order.
+
+    Divides the panel into horizontal tiers (rows). Within each tier,
+    bubbles are ordered left-to-right. Tiers are ordered top-to-bottom.
+    This produces the classic Z-pattern: top-left → top-right →
+    bottom-left → bottom-right.
+
+    Returns:
+        (tier_index, normalized_x, normalized_y) for sorting.
+    """
+    pos = bubble.get("position", (0.5, 0.5))
+    if isinstance(pos, str):
+        pos = POSITION_HINTS.get(pos, (0.5, 0.5))
+    x, y = pos
+
+    # Divide into 3 tiers: top (0-0.33), middle (0.33-0.66), bottom (0.66-1.0)
+    if y < 0.33:
+        tier = 0
+    elif y < 0.66:
+        tier = 1
+    else:
+        tier = 2
+
+    return (tier, x, y)
+
+
+def sort_bubbles_z_pattern(
+    bubbles: list[dict],
+    face_regions: list[tuple[float, float, float, float]] | None = None,
+) -> list[dict]:
+    """Sort and adjust bubble positions to enforce Z-pattern reading order.
+
+    Ensures that dialogue bubbles follow the Western comic reading convention:
+    left-to-right, top-to-bottom. The first speaker always gets the highest
+    and leftmost position.
+
+    Args:
+        bubbles: List of bubble config dicts (as from create_bubble_config).
+        face_regions: Optional list of (x, y, w, h) normalised face bounding
+            boxes to avoid. Bubbles overlapping faces will be nudged away.
+
+    Returns:
+        New list of bubble dicts with adjusted positions for correct
+        reading order. Non-dialogue types (sfx, caption, narration) are
+        left in their original positions.
+    """
+    if not bubbles:
+        return bubbles
+
+    # Separate exempt bubbles from dialogue bubbles
+    dialogue_bubbles: list[dict] = []
+    exempt_bubbles: list[tuple[int, dict]] = []  # (original_index, bubble)
+
+    for i, b in enumerate(bubbles):
+        btype = b.get("type", "speech")
+        if btype in _Z_PATTERN_EXEMPT_TYPES:
+            exempt_bubbles.append((i, b))
+        else:
+            dialogue_bubbles.append(b)
+
+    if len(dialogue_bubbles) <= 1:
+        # Nothing to reorder — but still check face avoidance
+        if face_regions and dialogue_bubbles:
+            dialogue_bubbles = [
+                _nudge_away_from_faces(b, face_regions) for b in dialogue_bubbles
+            ]
+        # Reconstruct original order with exempt bubbles in place
+        return _merge_exempt(dialogue_bubbles, exempt_bubbles, len(bubbles))
+
+    # Sort dialogue bubbles by Z-pattern
+    dialogue_bubbles.sort(key=_z_pattern_sort_key)
+
+    # Ensure first speaker is highest and leftmost
+    if len(dialogue_bubbles) >= 2:
+        dialogue_bubbles = _enforce_first_speaker_priority(dialogue_bubbles)
+
+    # Enforce minimum vertical/horizontal separation between consecutive bubbles
+    dialogue_bubbles = _enforce_bubble_separation(dialogue_bubbles)
+
+    # Nudge away from face regions
+    if face_regions:
+        dialogue_bubbles = [
+            _nudge_away_from_faces(b, face_regions) for b in dialogue_bubbles
+        ]
+
+    return _merge_exempt(dialogue_bubbles, exempt_bubbles, len(bubbles))
+
+
+def _enforce_first_speaker_priority(bubbles: list[dict]) -> list[dict]:
+    """Ensure the first bubble in the sorted list is higher and further left.
+
+    If the first two bubbles are on the same tier, nudge the first one
+    slightly up and left, and the second one slightly down and right.
+
+    Args:
+        bubbles: Already Z-pattern sorted dialogue bubbles (at least 2).
+
+    Returns:
+        Adjusted list of bubbles.
+    """
+    result = [dict(b) for b in bubbles]  # shallow copy each
+
+    first = result[0]
+    second = result[1]
+
+    pos0 = first.get("position", (0.5, 0.5))
+    pos1 = second.get("position", (0.5, 0.5))
+
+    if isinstance(pos0, str):
+        pos0 = POSITION_HINTS.get(pos0, (0.5, 0.5))
+    if isinstance(pos1, str):
+        pos1 = POSITION_HINTS.get(pos1, (0.5, 0.5))
+
+    x0, y0 = pos0
+    x1, y1 = pos1
+
+    # If first speaker is NOT above second, swap/adjust
+    min_y_gap = 0.04  # minimum vertical separation
+    min_x_gap = 0.05  # first speaker should be at least this much to the left
+
+    if y0 > y1 - min_y_gap:
+        # First speaker needs to move up
+        y0 = max(0.06, min(y0, y1 - min_y_gap))
+        result[0] = {**first, "position": (x0, y0)}
+
+    if x0 > x1 - min_x_gap and abs(y0 - y1) < 0.15:
+        # Same tier: first speaker should be further left
+        mid_x = (x0 + x1) / 2
+        x0 = max(0.10, mid_x - min_x_gap)
+        x1 = min(0.90, mid_x + min_x_gap)
+        result[0] = {**result[0], "position": (x0, y0)}
+        result[1] = {**second, "position": (x1, y1)}
+
+    return result
+
+
+def _enforce_bubble_separation(
+    bubbles: list[dict], min_sep: float = 0.08
+) -> list[dict]:
+    """Ensure consecutive bubbles have minimum vertical separation.
+
+    Prevents overlapping bubbles that would create ambiguous reading order.
+
+    Args:
+        bubbles: Z-pattern sorted dialogue bubbles.
+        min_sep: Minimum vertical separation (normalised).
+
+    Returns:
+        Adjusted list of bubbles.
+    """
+    result = [dict(b) for b in bubbles]
+
+    for i in range(1, len(result)):
+        prev_pos = result[i - 1].get("position", (0.5, 0.5))
+        curr_pos = result[i].get("position", (0.5, 0.5))
+
+        if isinstance(prev_pos, str):
+            prev_pos = POSITION_HINTS.get(prev_pos, (0.5, 0.5))
+        if isinstance(curr_pos, str):
+            curr_pos = POSITION_HINTS.get(curr_pos, (0.5, 0.5))
+
+        px, py = prev_pos
+        cx, cy = curr_pos
+
+        # If bubbles are too close horizontally (same column) and vertically
+        if abs(px - cx) < 0.15 and abs(py - cy) < min_sep:
+            # Push current bubble down
+            new_cy = min(0.92, py + min_sep)
+            result[i] = {**result[i], "position": (cx, new_cy)}
+
+    return result
+
+
+def _nudge_away_from_faces(
+    bubble: dict,
+    face_regions: list[tuple[float, float, float, float]],
+    nudge_amount: float = 0.08,
+) -> dict:
+    """Nudge a bubble away from face regions if they overlap.
+
+    Args:
+        bubble: Bubble config dict.
+        face_regions: List of (x_center, y_center, width, height)
+            normalised face bounding boxes.
+        nudge_amount: How far to nudge (normalised coordinates).
+
+    Returns:
+        Possibly adjusted bubble dict.
+    """
+    pos = bubble.get("position", (0.5, 0.5))
+    if isinstance(pos, str):
+        pos = POSITION_HINTS.get(pos, (0.5, 0.5))
+    bx, by = pos
+
+    # Approximate bubble size as 0.15 x 0.10 normalised (rough estimate)
+    bubble_half_w = 0.12
+    bubble_half_h = 0.06
+
+    for fx, fy, fw, fh in face_regions:
+        face_half_w = fw / 2
+        face_half_h = fh / 2
+
+        # AABB overlap check
+        overlap_x = (abs(bx - fx) < (bubble_half_w + face_half_w))
+        overlap_y = (abs(by - fy) < (bubble_half_h + face_half_h))
+
+        if overlap_x and overlap_y:
+            # Nudge bubble upward (prefer keeping bubbles above faces)
+            new_by = max(0.06, fy - face_half_h - bubble_half_h - nudge_amount)
+            # If moving up would go off-panel, try moving to the side
+            if new_by < 0.06:
+                if bx < fx:
+                    new_bx = max(0.10, fx - face_half_w - bubble_half_w - nudge_amount)
+                else:
+                    new_bx = min(0.90, fx + face_half_w + bubble_half_w + nudge_amount)
+                return {**bubble, "position": (new_bx, by)}
+
+            return {**bubble, "position": (bx, new_by)}
+
+    return bubble
+
+
+def _merge_exempt(
+    dialogue: list[dict],
+    exempt: list[tuple[int, dict]],
+    total: int,
+) -> list[dict]:
+    """Merge dialogue and exempt bubbles back into a single list.
+
+    Exempt bubbles keep their original index positions.
+    Dialogue bubbles fill the remaining slots in Z-pattern order.
+    """
+    result: list[dict | None] = [None] * total
+
+    # Place exempt bubbles at their original indices
+    for idx, b in exempt:
+        if idx < total:
+            result[idx] = b
+
+    # Fill remaining slots with dialogue bubbles in Z-pattern order
+    d_iter = iter(dialogue)
+    for i in range(total):
+        if result[i] is None:
+            try:
+                result[i] = next(d_iter)
+            except StopIteration:
+                break
+
+    # Append any remaining dialogue bubbles
+    for b in d_iter:
+        result.append(b)
+
+    return [b for b in result if b is not None]
+
+
+# ---------------------------------------------------------------------------
+# Mouth Position Estimation & Tail Targeting
+# ---------------------------------------------------------------------------
+
+def estimate_mouth_position(
+    speaker_position: tuple[float, float],
+    speaker_height_ratio: float = 1.0,
+) -> tuple[float, float]:
+    """Estimate mouth position from a speaker's body/center position.
+
+    Professional comic convention: balloon tails point at the speaker's
+    MOUTH, not their body centre. The mouth is approximately at the
+    top 15-20% of the body (if speaker_position is body centre), or
+    slightly below head centre (if speaker_position is head centre).
+
+    Args:
+        speaker_position: (x, y) normalised position of the speaker.
+            Convention: this is the character's approximate centre/torso.
+        speaker_height_ratio: Approximate fraction of panel height the
+            character occupies (0.0-1.0). Used to estimate head offset.
+            Default 1.0 means full-height character.
+
+    Returns:
+        (x, y) estimated mouth position in normalised coordinates.
+    """
+    sx, sy = speaker_position
+
+    # Mouth is roughly at the top ~20% of the character's body.
+    # For a character whose centre is at sy, the head is above centre.
+    # Offset: move up by ~30% of the character's half-height
+    char_half_height = speaker_height_ratio * 0.25  # half of ~50% panel occupation
+    mouth_offset = char_half_height * 0.60  # mouth is ~60% up from centre to top
+
+    mouth_y = max(0.02, sy - mouth_offset)
+    # Mouth x stays the same (faces are roughly centred horizontally)
+    mouth_x = sx
+
+    return (mouth_x, mouth_y)
+
+
+def compute_tail_target(
+    bubble: dict,
+    speaker_position: tuple[float, float] | None = None,
+    mouth_position: tuple[float, float] | None = None,
+) -> dict:
+    """Set or improve the tail_target for a bubble based on speaker info.
+
+    Priority:
+    1. Explicit mouth_position (most accurate — e.g., from face detection)
+    2. Estimated from speaker_position
+    3. Keep existing tail_target unchanged
+
+    Args:
+        bubble: Bubble config dict.
+        speaker_position: (x, y) normalised position of the speaker's body.
+        mouth_position: (x, y) explicit mouth position (overrides estimation).
+
+    Returns:
+        Updated bubble dict with corrected tail_target.
+    """
+    if mouth_position is not None:
+        return {**bubble, "tail_target": mouth_position}
+
+    if speaker_position is not None:
+        estimated = estimate_mouth_position(speaker_position)
+        return {**bubble, "tail_target": estimated}
+
+    # Keep existing
+    return bubble
+
+
+# ---------------------------------------------------------------------------
 # Bubble geometry helpers
 # ---------------------------------------------------------------------------
 
@@ -620,9 +968,23 @@ def _draw_speech_tail(
     outline: str = "black",
     border_w: int = _BORDER_WIDTH,
 ):
-    """Curved Bézier tail from bubble edge pointing toward target (mouth).
+    """Smooth tapered Bézier tail from bubble edge toward speaker's mouth.
 
-    Tail width is proportional to bubble size (not fixed).
+    Professional comic balloon tail conventions:
+    - Wide base at the bubble edge, tapering to a point
+    - Smooth curved path (not a thin straight line)
+    - Tail tip ends at ~50-60% of the distance between bubble and speaker
+    - Base width proportional to bubble size (~10-15% of shorter side)
+    - Perpendicular Bézier offset creates natural curvature
+    - Base is covered with fill to blend seamlessly into the bubble
+
+    Args:
+        draw: PIL ImageDraw instance.
+        rect: (x0, y0, x1, y1) bounding box of the bubble.
+        target: (px_x, px_y) pixel coordinates of the speaker's mouth.
+        fill: Bubble fill colour.
+        outline: Bubble border colour.
+        border_w: Border width in pixels.
     """
     x0, y0, x1, y1 = rect
     cx = (x0 + x1) // 2
@@ -633,21 +995,20 @@ def _draw_speech_tail(
     tx, ty = target
 
     # Determine which edge the tail attaches to (closest to target)
-    # Check all four edges
     edges = {
         "bottom": ((cx, y1), abs(ty - y1) if ty > y1 else float("inf")),
         "top":    ((cx, y0), abs(ty - y0) if ty < y0 else float("inf")),
         "left":   ((x0, cy), abs(tx - x0) if tx < x0 else float("inf")),
         "right":  ((x1, cy), abs(tx - x1) if tx > x1 else float("inf")),
     }
-    # Pick the edge closest to the target
     best_edge = min(edges.items(), key=lambda e: e[1][1])
     edge_name = best_edge[0]
 
-    # Tail base width proportional to bubble size (5-15% of shorter side)
-    base_size = max(8, min(bubble_w, bubble_h) // 8)
+    # Tail base width proportional to bubble size (10-15% of shorter side)
+    # Professional standard: wide enough to look natural, not stubby
+    base_size = max(8, int(min(bubble_w, bubble_h) * 0.12))
 
-    # Tail base offset toward target horizontally/vertically
+    # Tail base offset toward target (1/3 of the way from centre to target)
     if edge_name in ("bottom", "top"):
         base_cx = max(x0 + base_size + 4, min(x1 - base_size - 4, cx + (tx - cx) // 3))
         if edge_name == "bottom":
@@ -669,39 +1030,56 @@ def _draw_speech_tail(
             base_left = (base_x, base_cy - base_size)
             base_right = (base_x, base_cy + base_size)
 
-    # Limit tail length to ~45% of bubble height
-    max_tail_len = int(max(bubble_h, bubble_w) * 0.45)
+    # --- Tail length: 50-60% of distance between bubble edge and target ---
+    # This is the professional standard (Blambot): tail does NOT reach
+    # all the way to the speaker — it ends at roughly half the distance.
     base_mid = ((base_left[0] + base_right[0]) / 2, (base_left[1] + base_right[1]) / 2)
     dx = tx - base_mid[0]
     dy = ty - base_mid[1]
     dist = max(1, (dx**2 + dy**2) ** 0.5)
-    if dist > max_tail_len:
-        scale = max_tail_len / dist
-        tip_x = int(base_mid[0] + dx * scale)
-        tip_y = int(base_mid[1] + dy * scale)
-    else:
-        tip_x, tip_y = tx, ty
+
+    # Target distance: 50-60% of the total distance (55% as sweet spot)
+    tail_reach = 0.55
+    tip_x = int(base_mid[0] + dx * tail_reach)
+    tip_y = int(base_mid[1] + dy * tail_reach)
     tip = (tip_x, tip_y)
 
-    # Control point for Bézier curve — offset perpendicular to tail direction
+    # --- Smooth tapered Bézier curve ---
+    # Control point offset perpendicular to tail direction for natural curve
+    # Larger offset = more curve; 0.18 gives a natural, professional look
+    perp_scale = 0.18
+    perp_x = -(tip[1] - base_mid[1]) * perp_scale
+    perp_y = (tip[0] - base_mid[0]) * perp_scale
     mid_x = (base_mid[0] + tip[0]) / 2
     mid_y = (base_mid[1] + tip[1]) / 2
-    # Perpendicular offset for curvature
-    perp_x = -(tip[1] - base_mid[1]) * 0.15
-    perp_y = (tip[0] - base_mid[0]) * 0.15
     ctrl_left = (mid_x + perp_x, mid_y + perp_y)
     ctrl_right = (mid_x - perp_x, mid_y - perp_y)
 
-    # Generate curved polygon points via Bézier
-    n_steps = 12
-    left_curve = []
-    right_curve = []
+    # Generate tapered curved polygon via Bézier with progressive narrowing
+    n_steps = 16  # more steps = smoother curve
+    left_curve: list[tuple[int, int]] = []
+    right_curve: list[tuple[int, int]] = []
+
     for i in range(n_steps + 1):
         t = i / n_steps
         lp = _bezier_point(base_left, ctrl_left, tip, t)
         rp = _bezier_point(base_right, ctrl_right, tip, t)
-        left_curve.append((int(lp[0]), int(lp[1])))
-        right_curve.append((int(rp[0]), int(rp[1])))
+
+        # Smooth taper: progressively narrow toward the tip
+        # Width goes from 1.0 at base to 0.0 at tip (smooth cubic ease)
+        taper = (1.0 - t) ** 1.5  # cubic ease gives natural taper
+
+        # Interpolate between the curve point and the centre line
+        center_x = (lp[0] + rp[0]) / 2
+        center_y = (lp[1] + rp[1]) / 2
+
+        tapered_lx = center_x + (lp[0] - center_x) * taper
+        tapered_ly = center_y + (lp[1] - center_y) * taper
+        tapered_rx = center_x + (rp[0] - center_x) * taper
+        tapered_ry = center_y + (rp[1] - center_y) * taper
+
+        left_curve.append((int(tapered_lx), int(tapered_ly)))
+        right_curve.append((int(tapered_rx), int(tapered_ry)))
 
     # Build polygon: left curve forward + right curve backward
     polygon = left_curve + list(reversed(right_curve))
@@ -1652,6 +2030,10 @@ def create_bubble_config(
     tail_target_2 = kwargs.pop("tail_target_2", None)
     rotation = kwargs.pop("rotation", None)
 
+    # Speaker/mouth position for improved tail targeting
+    speaker_position = kwargs.pop("speaker_position", None)
+    mouth_position = kwargs.pop("mouth_position", None)
+
     config: dict = {
         "text": text,
         "type": bubble_type,
@@ -1663,6 +2045,10 @@ def create_bubble_config(
     }
     if rotation is not None:
         config["rotation"] = rotation
+    if speaker_position is not None:
+        config["speaker_position"] = tuple(speaker_position)
+    if mouth_position is not None:
+        config["mouth_position"] = tuple(mouth_position)
     if "color" in kwargs:
         config["color"] = kwargs.pop("color")
     if "border_color" in kwargs:
@@ -1687,16 +2073,31 @@ def add_bubbles(
     bubbles: list[dict],
     style: str = "western",
     panel_id: str = "default",
+    enforce_reading_order: bool = True,
+    face_regions: list[tuple[float, float, float, float]] | None = None,
 ) -> Image.Image:
     """Add all speech bubbles to *panel_image*. Returns a **new** image.
 
     Implements:
+    - Z-pattern reading order enforcement (left-to-right, top-to-bottom)
     - Text-first adaptive sizing (balloon resizes to fit text)
     - Comic lettering grammar normalisation
     - Duplicate text detection and skipping
-    - Bézier curved tails
+    - Smooth tapered Bézier tails pointing at speaker mouth
+    - Automatic mouth position estimation from speaker_position
     - Genre-specific caption styling
+    - Face avoidance (bubbles don't cover faces)
     - NEVER truncates text
+
+    Args:
+        panel_image: Source panel image.
+        bubbles: List of bubble config dicts.
+        style: Comic style ("western", "manga", "cartoon", etc.).
+        panel_id: Unique panel ID for deduplication.
+        enforce_reading_order: If True, reorder dialogue bubbles to
+            follow Z-pattern reading order. Default True.
+        face_regions: Optional list of (x, y, w, h) normalised face
+            bounding boxes. Bubbles will be nudged to avoid covering faces.
     """
     img = panel_image.copy()
     if img.mode not in ("RGB", "RGBA"):
@@ -1704,6 +2105,24 @@ def add_bubbles(
 
     draw = ImageDraw.Draw(img)
     w, h = img.size
+
+    # --- Z-Pattern reading order enforcement ---
+    if enforce_reading_order and len(bubbles) > 1:
+        bubbles = sort_bubbles_z_pattern(bubbles, face_regions=face_regions)
+    elif face_regions:
+        # Even without reading order, avoid faces
+        bubbles = [_nudge_away_from_faces(b, face_regions) for b in bubbles]
+
+    # --- Auto-compute tail targets from speaker/mouth positions ---
+    processed_bubbles = []
+    for b in bubbles:
+        b = compute_tail_target(
+            b,
+            speaker_position=b.get("speaker_position"),
+            mouth_position=b.get("mouth_position"),
+        )
+        processed_bubbles.append(b)
+    bubbles = processed_bubbles
 
     # Reset deduplication for this panel
     _reset_dedup()

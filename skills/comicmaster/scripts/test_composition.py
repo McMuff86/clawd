@@ -20,18 +20,25 @@ from story_planner import (
     validate_shot_progression,
     _enrich_sequential_fields,
     _enrich_dialogue_positions,
+    _enrich_180_degree_rule,
+    _enrich_panel_importance,
     VALID_GAZE_DIRECTIONS,
     VALID_SUBJECT_POSITIONS,
     VALID_SPATIAL_RELATIONS,
     VALID_FOCAL_POINTS,
+    VALID_PANEL_IMPORTANCE,
 )
 from panel_generator import (
     _get_sequential_composition_tags,
+    _get_180_degree_rule_tags,
+    _get_dynamic_camera_tags,
     build_panel_prompt,
     COMPOSITION_TEMPLATES,
     FOCAL_POINT_TAGS,
     SUBJECT_POSITION_TAGS,
     GAZE_DIRECTION_TAGS,
+    CHARACTER_POSITION_TAGS,
+    DYNAMIC_CAMERA_ANGLE_MAP,
 )
 
 
@@ -675,6 +682,410 @@ def test_dialogue_plan_enrichment():
           f"Got {len(warnings)} enrichment warnings for monotonous dialogue plan")
 
 
+# ── Tests: 180-Degree Rule ─────────────────────────────────────────────────
+
+def test_180_degree_rule_basic():
+    """180-degree rule assigns consistent character positions per scene."""
+    print("\n── test_180_degree_rule_basic ──")
+    plan = make_dialogue_plan()
+    enriched = enrich_story_plan(plan)
+    panels = sorted(enriched["panels"], key=lambda p: p["sequence"])
+
+    # d1 has both alice and bob → should get character_positions
+    d1 = next(p for p in panels if p["id"] == "d1")
+    check("character_positions" in d1,
+          "Dialogue panel with 2+ chars gets character_positions")
+
+    positions = d1.get("character_positions", {})
+    check("alice" in positions and "bob" in positions,
+          f"Both characters have positions: {positions}")
+    check(positions.get("alice") != positions.get("bob"),
+          f"Characters on different sides: {positions}")
+
+
+def test_180_degree_rule_consistency_across_scene():
+    """Character positions remain consistent across all panels in the same scene."""
+    print("\n── test_180_degree_rule_consistency_across_scene ──")
+    plan = {
+        "title": "180 Test",
+        "style": "western",
+        "characters": [
+            {"id": "a", "name": "Alpha", "visual_description": "tall man"},
+            {"id": "b", "name": "Beta", "visual_description": "short woman"},
+        ],
+        "panels": [
+            {
+                "id": "s1", "sequence": 1,
+                "scene": "Office meeting room",
+                "action": "Alpha and Beta discuss plans",
+                "characters_present": ["a", "b"],
+                "shot_type": "medium",
+                "mood": "neutral",
+                "dialogue": [{"character_id": "a", "text": "Let's begin."}],
+            },
+            {
+                "id": "s2", "sequence": 2,
+                "scene": "Office meeting room",
+                "action": "Beta responds passionately",
+                "characters_present": ["a", "b"],
+                "shot_type": "medium_close_up",
+                "mood": "determined",
+                "dialogue": [{"character_id": "b", "text": "I agree!"}],
+            },
+            {
+                "id": "s3", "sequence": 3,
+                "scene": "Office meeting room",
+                "action": "Both stand up",
+                "characters_present": ["a", "b"],
+                "shot_type": "medium",
+                "mood": "happy",
+            },
+        ],
+        "pages": [
+            {"page_number": 1, "layout": "page_1x3", "panel_ids": ["s1", "s2", "s3"]},
+        ],
+    }
+    enriched = enrich_story_plan(plan)
+    panels = sorted(enriched["panels"], key=lambda p: p["sequence"])
+
+    # All 3 panels should have the same positions for a and b
+    positions_list = [p.get("character_positions", {}) for p in panels]
+    for pos in positions_list:
+        check(len(pos) >= 2, f"Panel has character_positions: {pos}")
+
+    # Check consistency: same char → same side across all panels
+    a_sides = [p.get("character_positions", {}).get("a") for p in panels]
+    b_sides = [p.get("character_positions", {}).get("b") for p in panels]
+    check(len(set(a_sides)) == 1,
+          f"Alpha consistent across scene: {a_sides}")
+    check(len(set(b_sides)) == 1,
+          f"Beta consistent across scene: {b_sides}")
+
+
+def test_180_degree_rule_different_scenes():
+    """Different scenes can have different character positions."""
+    print("\n── test_180_degree_rule_different_scenes ──")
+    plan = {
+        "title": "Multi Scene 180",
+        "style": "western",
+        "characters": [
+            {"id": "a", "name": "Alpha", "visual_description": "tall man"},
+            {"id": "b", "name": "Beta", "visual_description": "short woman"},
+        ],
+        "panels": [
+            {
+                "id": "sc1p1", "sequence": 1,
+                "scene": "Office",
+                "action": "Conversation",
+                "characters_present": ["a", "b"],
+                "shot_type": "medium",
+                "mood": "neutral",
+                "dialogue": [{"character_id": "a", "text": "Hi"}],
+            },
+            {
+                "id": "sc2p1", "sequence": 2,
+                "scene": "Park bench",
+                "action": "Different conversation",
+                "characters_present": ["a", "b"],
+                "shot_type": "medium",
+                "mood": "calm",
+                "dialogue": [{"character_id": "b", "text": "Hello"}],
+            },
+        ],
+        "pages": [
+            {"page_number": 1, "layout": "page_2x1", "panel_ids": ["sc1p1", "sc2p1"]},
+        ],
+    }
+    enriched = enrich_story_plan(plan)
+    panels = sorted(enriched["panels"], key=lambda p: p["sequence"])
+
+    # Both panels should have character_positions (different scenes)
+    for p in panels:
+        check("character_positions" in p,
+              f"Panel {p['id']} has character_positions")
+
+
+def test_180_degree_rule_single_char_skipped():
+    """Panels with only 1 character don't get character_positions."""
+    print("\n── test_180_degree_rule_single_char_skipped ──")
+    plan = make_base_plan()
+    enriched = enrich_story_plan(plan)
+
+    # p1 has only "hero" → should NOT have character_positions
+    p1 = next(p for p in enriched["panels"] if p["id"] == "p1")
+    check("character_positions" not in p1 or len(p1.get("character_positions", {})) == 0,
+          "Single-character panel has no character_positions")
+
+
+def test_180_degree_rule_preserves_explicit():
+    """Pre-set character_positions are not overwritten."""
+    print("\n── test_180_degree_rule_preserves_explicit ──")
+    plan = make_dialogue_plan()
+    plan["panels"][0]["character_positions"] = {"alice": "right", "bob": "left"}
+    enriched = enrich_story_plan(plan)
+    d1 = next(p for p in enriched["panels"] if p["id"] == "d1")
+    check(d1["character_positions"]["alice"] == "right",
+          "Explicit position preserved: alice=right")
+    check(d1["character_positions"]["bob"] == "left",
+          "Explicit position preserved: bob=left")
+
+
+def test_180_degree_rule_prompt_tags():
+    """_get_180_degree_rule_tags generates position prompts."""
+    print("\n── test_180_degree_rule_prompt_tags ──")
+    characters = [
+        {"id": "alice", "name": "Alice", "visual_description": "woman with blue hair"},
+        {"id": "bob", "name": "Bob", "visual_description": "man with glasses"},
+    ]
+    panel = {
+        "id": "tp1", "sequence": 1,
+        "characters_present": ["alice", "bob"],
+        "character_positions": {"alice": "left", "bob": "right"},
+    }
+    tags = _get_180_degree_rule_tags(panel, characters)
+    tag_str = " ".join(tags).lower()
+    check("alice" in tag_str and "left" in tag_str,
+          f"Alice on left in tags: {tags}")
+    check("bob" in tag_str and "right" in tag_str,
+          f"Bob on right in tags: {tags}")
+
+
+def test_180_degree_rule_no_tags_single_char():
+    """No position tags for single-character panels."""
+    print("\n── test_180_degree_rule_no_tags_single_char ──")
+    characters = [
+        {"id": "alice", "name": "Alice", "visual_description": "woman"},
+    ]
+    panel = {
+        "id": "tp2", "sequence": 1,
+        "characters_present": ["alice"],
+    }
+    tags = _get_180_degree_rule_tags(panel, characters)
+    check(len(tags) == 0, "No position tags for single character")
+
+
+def test_180_degree_rule_in_prompt():
+    """build_panel_prompt includes 180-degree character positions."""
+    print("\n── test_180_degree_rule_in_prompt ──")
+    characters = [
+        {"id": "alice", "name": "Alice", "visual_description": "woman with blue hair"},
+        {"id": "bob", "name": "Bob", "visual_description": "man with glasses"},
+    ]
+    panel = {
+        "id": "pp1", "sequence": 1,
+        "shot_type": "medium", "mood": "neutral",
+        "characters_present": ["alice", "bob"],
+        "character_positions": {"alice": "left", "bob": "right"},
+        "action": "Talking at table",
+        "scene": "café",
+    }
+    prompt = build_panel_prompt(panel, characters, "western")
+    prompt_lower = prompt.lower()
+    check("alice" in prompt_lower and "left" in prompt_lower,
+          "Prompt includes Alice on left")
+    check("bob" in prompt_lower and "right" in prompt_lower,
+          "Prompt includes Bob on right")
+
+
+# ── Tests: Dynamic Camera Angles ──────────────────────────────────────────
+
+def test_dynamic_camera_action_panel():
+    """Action panels get dramatic low-angle camera hints."""
+    print("\n── test_dynamic_camera_action_panel ──")
+    panel = {
+        "id": "ca1", "sequence": 1, "shot_type": "medium",
+        "mood": "action", "action": "Hero punches villain",
+        "characters_present": ["hero"],
+    }
+    tags = _get_dynamic_camera_tags(panel)
+    tag_str = " ".join(tags).lower()
+    check("low angle" in tag_str or "worm" in tag_str or "dynamic" in tag_str,
+          f"Action panel gets dramatic angle: {tags}")
+
+
+def test_dynamic_camera_dialogue_panel():
+    """Dialogue panels get eye-level camera hints."""
+    print("\n── test_dynamic_camera_dialogue_panel ──")
+    panel = {
+        "id": "ca2", "sequence": 2, "shot_type": "medium",
+        "mood": "neutral", "action": "Talking calmly",
+        "characters_present": ["hero"],
+        "dialogue": [{"character_id": "hero", "text": "Hello"}],
+    }
+    tags = _get_dynamic_camera_tags(panel)
+    tag_str = " ".join(tags).lower()
+    check("eye-level" in tag_str or "natural" in tag_str or "conversational" in tag_str,
+          f"Dialogue panel gets eye-level: {tags}")
+
+
+def test_dynamic_camera_establishing_panel():
+    """Establishing (wide) panels get elevated wide angle hints."""
+    print("\n── test_dynamic_camera_establishing_panel ──")
+    panel = {
+        "id": "ca3", "sequence": 1, "shot_type": "wide",
+        "mood": "neutral", "action": "View of the city",
+        "characters_present": [],
+    }
+    tags = _get_dynamic_camera_tags(panel)
+    tag_str = " ".join(tags).lower()
+    check("elevated" in tag_str or "wide angle" in tag_str or "overview" in tag_str,
+          f"Establishing panel gets elevated angle: {tags}")
+
+
+def test_dynamic_camera_emotion_panel():
+    """Emotional close-up panels get slight angle hints."""
+    print("\n── test_dynamic_camera_emotion_panel ──")
+    panel = {
+        "id": "ca4", "sequence": 3, "shot_type": "close_up",
+        "mood": "sad", "action": "Hero cries",
+        "characters_present": ["hero"],
+    }
+    tags = _get_dynamic_camera_tags(panel)
+    tag_str = " ".join(tags).lower()
+    check("intimate" in tag_str or "slight" in tag_str or "close-up" in tag_str,
+          f"Emotion panel gets intimate angle: {tags}")
+
+
+def test_dynamic_camera_in_composition_tags():
+    """Dynamic camera tags are included in sequential composition tags."""
+    print("\n── test_dynamic_camera_in_composition_tags ──")
+    panel = {
+        "id": "ccomp1", "sequence": 1, "shot_type": "medium",
+        "mood": "action", "action": "Hero fights",
+        "characters_present": ["hero"],
+    }
+    tags = _get_sequential_composition_tags(panel)
+    tag_str = " ".join(tags).lower()
+    # Should contain some camera angle hint from dynamic angles
+    check("angle" in tag_str or "perspective" in tag_str or "dynamic" in tag_str,
+          f"Composition tags include dynamic camera hint")
+
+
+# ── Tests: Panel Importance (Pacing) ──────────────────────────────────────
+
+def test_panel_importance_splash_is_3():
+    """Splash panels get panel_importance=3."""
+    print("\n── test_panel_importance_splash_is_3 ──")
+    panels = [
+        {"id": "pi1", "sequence": 1, "narrative_weight": "splash",
+         "mood": "dramatic", "action": "Epic reveal", "shot_type": "wide"},
+    ]
+    _enrich_panel_importance(panels)
+    check(panels[0].get("panel_importance") == 3,
+          f"Splash → importance 3 (got {panels[0].get('panel_importance')})")
+
+
+def test_panel_importance_high_narrative():
+    """High narrative weight + dramatic action → importance 3."""
+    print("\n── test_panel_importance_high_narrative ──")
+    panels = [
+        {"id": "pi2", "sequence": 1, "narrative_weight": "high",
+         "mood": "dramatic", "action": "Hero reveals the truth", "shot_type": "medium"},
+    ]
+    _enrich_panel_importance(panels)
+    check(panels[0].get("panel_importance") == 3,
+          f"High weight + reveal → importance 3 (got {panels[0].get('panel_importance')})")
+
+
+def test_panel_importance_transition_is_1():
+    """Calm transition panels with low weight → importance 1."""
+    print("\n── test_panel_importance_transition_is_1 ──")
+    panels = [
+        {"id": "pi3", "sequence": 1, "narrative_weight": "low",
+         "mood": "calm", "action": "Character walks through hallway", "shot_type": "wide"},
+    ]
+    _enrich_panel_importance(panels)
+    check(panels[0].get("panel_importance") == 1,
+          f"Low + calm walk → importance 1 (got {panels[0].get('panel_importance')})")
+
+
+def test_panel_importance_default_is_2():
+    """Standard panels get panel_importance=2 by default."""
+    print("\n── test_panel_importance_default_is_2 ──")
+    panels = [
+        {"id": "pi4", "sequence": 1, "narrative_weight": "medium",
+         "mood": "neutral", "action": "Character enters room", "shot_type": "medium"},
+    ]
+    _enrich_panel_importance(panels)
+    check(panels[0].get("panel_importance") == 2,
+          f"Medium/neutral → importance 2 (got {panels[0].get('panel_importance')})")
+
+
+def test_panel_importance_preserves_explicit():
+    """Explicit panel_importance is not overwritten."""
+    print("\n── test_panel_importance_preserves_explicit ──")
+    panels = [
+        {"id": "pi5", "sequence": 1, "narrative_weight": "low",
+         "mood": "calm", "action": "Walking", "shot_type": "wide",
+         "panel_importance": 3},  # Explicit override
+    ]
+    _enrich_panel_importance(panels)
+    check(panels[0].get("panel_importance") == 3,
+          "Explicit panel_importance=3 preserved despite low weight")
+
+
+def test_panel_importance_validation():
+    """panel_importance validation catches invalid values."""
+    print("\n── test_panel_importance_validation ──")
+    plan = make_base_plan()
+
+    # Valid value
+    plan["panels"][0]["panel_importance"] = 2
+    is_valid, errors = validate_story_plan(plan)
+    check(is_valid, "panel_importance=2 is valid")
+
+    # Invalid value
+    plan2 = make_base_plan()
+    plan2["panels"][0]["panel_importance"] = 5
+    _, errors2 = validate_story_plan(plan2)
+    check(any("panel_importance" in e for e in errors2),
+          "panel_importance=5 is caught as invalid")
+
+    # Invalid type
+    plan3 = make_base_plan()
+    plan3["panels"][0]["panel_importance"] = "high"
+    _, errors3 = validate_story_plan(plan3)
+    check(any("panel_importance" in e for e in errors3),
+          "panel_importance='high' (string) is caught as invalid")
+
+
+def test_panel_importance_in_enriched_plan():
+    """Full enrichment sets panel_importance on all panels."""
+    print("\n── test_panel_importance_in_enriched_plan ──")
+    plan = make_base_plan()
+    enriched = enrich_story_plan(plan)
+
+    for p in enriched["panels"]:
+        pi = p.get("panel_importance")
+        check(pi in VALID_PANEL_IMPORTANCE,
+              f"Panel {p['id']} has valid panel_importance={pi}")
+
+
+def test_character_positions_validation():
+    """character_positions validation catches invalid values."""
+    print("\n── test_character_positions_validation ──")
+    plan = make_base_plan()
+
+    # Valid character_positions
+    plan["panels"][3]["character_positions"] = {"hero": "left", "villain": "right"}
+    is_valid, errors = validate_story_plan(plan)
+    check(is_valid, "Valid character_positions passes")
+
+    # Invalid side value
+    plan2 = make_base_plan()
+    plan2["panels"][3]["character_positions"] = {"hero": "top", "villain": "right"}
+    _, errors2 = validate_story_plan(plan2)
+    check(any("character_positions" in e for e in errors2),
+          "Invalid side 'top' is caught")
+
+    # Non-existent character
+    plan3 = make_base_plan()
+    plan3["panels"][3]["character_positions"] = {"ghost": "left"}
+    _, errors3 = validate_story_plan(plan3)
+    check(any("character_positions" in e for e in errors3),
+          "Non-existent character in character_positions is caught")
+
+
 # ── Run all tests ──────────────────────────────────────────────────────────
 
 def main():
@@ -718,6 +1129,33 @@ def main():
     test_build_panel_prompt_includes_composition()
     test_full_enrichment_pipeline()
     test_dialogue_plan_enrichment()
+
+    # 180-degree rule tests
+    test_180_degree_rule_basic()
+    test_180_degree_rule_consistency_across_scene()
+    test_180_degree_rule_different_scenes()
+    test_180_degree_rule_single_char_skipped()
+    test_180_degree_rule_preserves_explicit()
+    test_180_degree_rule_prompt_tags()
+    test_180_degree_rule_no_tags_single_char()
+    test_180_degree_rule_in_prompt()
+
+    # Dynamic camera angle tests
+    test_dynamic_camera_action_panel()
+    test_dynamic_camera_dialogue_panel()
+    test_dynamic_camera_establishing_panel()
+    test_dynamic_camera_emotion_panel()
+    test_dynamic_camera_in_composition_tags()
+
+    # Panel importance (pacing) tests
+    test_panel_importance_splash_is_3()
+    test_panel_importance_high_narrative()
+    test_panel_importance_transition_is_1()
+    test_panel_importance_default_is_2()
+    test_panel_importance_preserves_explicit()
+    test_panel_importance_validation()
+    test_panel_importance_in_enriched_plan()
+    test_character_positions_validation()
 
     # Summary
     print("\n" + "=" * 60)
