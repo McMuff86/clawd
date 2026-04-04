@@ -7,24 +7,46 @@ description: Generate complete comic pages from a short prompt. Creates story br
 
 Create complete comics from a short user prompt. Handles story planning, panel generation (ComfyUI), speech bubbles, page layout, and export.
 
+## Python Environment
+
+**Always use the venv Python** to get CLIP backend (face validation), torch, transformers:
+
+```bash
+PYTHON=~/clawd/skills/comicmaster/.venv/bin/python
+```
+
+If the venv doesn't exist, create it:
+```bash
+python3 -m venv ~/clawd/skills/comicmaster/.venv
+~/clawd/skills/comicmaster/.venv/bin/pip install torch torchvision transformers Pillow numpy requests
+```
+
 ## Quick Start
 
 ```bash
+PYTHON=~/clawd/skills/comicmaster/.venv/bin/python
+
 # Full pipeline from story plan
-python3 skills/comicmaster/scripts/comic_pipeline.py story_plan.json
+$PYTHON skills/comicmaster/scripts/comic_pipeline.py story_plan.json
 
 # With options
-python3 skills/comicmaster/scripts/comic_pipeline.py story_plan.json \
+$PYTHON skills/comicmaster/scripts/comic_pipeline.py story_plan.json \
     --preset dreamshaperXL --width 768 --height 768 --formats png,pdf,cbz
 
+# With integrated color grading (applied before bubbles)
+$PYTHON skills/comicmaster/scripts/comic_pipeline.py story_plan.json --color-grade noir
+
+# Skip automatic quality analysis
+$PYTHON skills/comicmaster/scripts/comic_pipeline.py story_plan.json --skip-quality
+
 # Re-do only bubbles + layout (skip image generation)
-python3 skills/comicmaster/scripts/comic_pipeline.py story_plan.json --skip-generate
+$PYTHON skills/comicmaster/scripts/comic_pipeline.py story_plan.json --skip-generate
 
 # Upscale panels after generation
-python3 skills/comicmaster/scripts/upscale.py output/panels/ --scale 2.0 --method auto
+$PYTHON skills/comicmaster/scripts/upscale.py output/panels/ --scale 2.0 --method auto
 
-# Apply color grading
-python3 skills/comicmaster/scripts/color_grading.py output/panels/ --grade cyberpunk
+# Apply color grading standalone
+$PYTHON skills/comicmaster/scripts/color_grading.py output/panels/ --grade cyberpunk
 ```
 
 ## Pipeline Flow
@@ -32,10 +54,12 @@ python3 skills/comicmaster/scripts/color_grading.py output/panels/ --grade cyber
 ```
 Story Plan JSON
   → Stage 0.5: Character Reference Generation (IPAdapter)
-  → Stage 1: Panel Generation (ComfyUI, batch-optimized)
-  → Stage 2: Speech Bubbles (PIL)
-  → Stage 3: Page Layout (PIL, dynamic or template)
-  → Stage 4: Export (PNG, PDF, CBZ with ComicInfo.xml)
+  → Stage 1:   Panel Generation (ComfyUI, batch-optimized)
+  → Stage 1.5q: Quality Report (auto, --skip-quality to disable)
+  → Stage 1.5: Color Grading (optional, --color-grade or story plan)
+  → Stage 2:   Speech Bubbles (PIL)
+  → Stage 3:   Page Layout (PIL, dynamic or template)
+  → Stage 4:   Export (PNG, PDF, CBZ with ComicInfo.xml)
 ```
 
 ## Workflow
@@ -93,20 +117,28 @@ Individual panels are in `panels/`, bubbled versions in `panels_bubbled/`.
 
 ```bash
 # Upscale for print (768px → 1536px)
-python3 scripts/upscale.py output/panels/ --scale 2.0
+$PYTHON scripts/upscale.py output/panels/ --scale 2.0
 
 # Apply color grading for unified look
-python3 scripts/color_grading.py output/panels/ --grade noir
+$PYTHON scripts/color_grading.py output/panels/ --grade noir
 ```
 
 ## Story Plan Schema
+
+### Root-Level Optional Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `color_grade` | string | Color grade preset to apply to all panels before bubbles. Options: `noir`, `vintage`, `vibrant`, `pastel`, `cyberpunk`, `manga_bw`. Overridden by `--color-grade` CLI arg. |
+| `reading_direction` | string | `ltr` (default) or `rtl` |
+| `preset` | string | ComfyUI preset name (default: `dreamshaperXL`) |
 
 ### Required Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `title` | string | Comic title |
-| `style` | string | `western`, `manga`, `cartoon`, `realistic`, `noir` |
+| `style` | string | `western`, `manga`, `cartoon`, `realistic`, `noir`, `cyberpunk` |
 | `characters[]` | array | At least 1 character |
 | `characters[].id` | string | Unique ID (e.g., `char_01`) |
 | `characters[].name` | string | Display name |
@@ -209,11 +241,40 @@ For 6+ panels with IPAdapter, the pipeline automatically:
 
 ## Color Grading
 
-Apply unified color palette across all panels:
+### Integrated (recommended)
+
+Color grading is integrated into the pipeline as Stage 1.5 — applied after panel generation, before speech bubbles:
 
 ```bash
-python3 scripts/color_grading.py panels/ --grade noir
-python3 scripts/color_grading.py --list  # show presets
+# Via CLI flag
+$PYTHON scripts/comic_pipeline.py story_plan.json --color-grade noir
+
+# Via story plan (add to root level)
+# { "title": "...", "color_grade": "noir", ... }
+```
+
+**Priority order:** `--color-grade` CLI arg > `color_grade` in story plan > auto-mapping from style.
+
+### Auto Color Grade by Style
+
+Some styles automatically apply a matching color grade (can be overridden):
+
+| Style | Auto Grade | Notes |
+|-------|-----------|-------|
+| `noir` | `noir` | Desaturated, cool, high contrast |
+| `cyberpunk` | `cyberpunk` | Cool purple, saturated, vignette |
+| `manga` | _(none)_ | Use `manga_bw` explicitly if needed |
+| `western` | _(none)_ | No auto-grade |
+| `cartoon` | _(none)_ | No auto-grade |
+| `realistic` | _(none)_ | No auto-grade |
+
+### Standalone
+
+Apply unified color palette across all panels (outside pipeline):
+
+```bash
+$PYTHON scripts/color_grading.py panels/ --grade noir
+$PYTHON scripts/color_grading.py --list  # show presets
 ```
 
 | Preset | Effect |
@@ -229,10 +290,10 @@ python3 scripts/color_grading.py --list  # show presets
 
 ```bash
 # Auto-detect best method (ComfyUI model → PIL fallback)
-python3 scripts/upscale.py panel.png --scale 2.0 --method auto
+$PYTHON scripts/upscale.py panel.png --scale 2.0 --method auto
 
 # Batch upscale all panels
-python3 scripts/upscale.py panels/ --scale 2.0
+$PYTHON scripts/upscale.py panels/ --scale 2.0
 ```
 
 | Method | Speed | Quality |
@@ -294,6 +355,7 @@ See `references/illustrious-xl-guide.md` for detailed model comparison, download
 | `upscale.py` | 2x/4x upscaling (ComfyUI model or PIL) |
 | `color_grading.py` | Color grade presets (6 styles) |
 | `quality_tracker.py` | PIL-based image quality metrics (sharpness, contrast, saturation, entropy, edges, exposure) |
+| `test_pipeline_integration.py` | Tests for quality tracker + color grading pipeline integration |
 | `utils.py` | Shared utilities |
 
 ## Workflows (JSON for ComfyUI)
@@ -326,23 +388,42 @@ See `references/style-guides.md` for prompt templates per style (Western, Manga,
 
 ## Quality Tracking
 
+### Integrated (automatic)
+
+Quality tracking runs automatically as Stage 1.5q after panel generation. It:
+- Scores all panels on technical + composition metrics
+- Saves `quality_scores.json` in the output directory
+- Prints a summary (avg score, best/worst panel)
+
+To disable: `--skip-quality`
+
+```bash
+# Runs automatically — quality report included in pipeline output
+$PYTHON scripts/comic_pipeline.py story_plan.json
+
+# Skip quality analysis for speed
+$PYTHON scripts/comic_pipeline.py story_plan.json --skip-quality
+```
+
+### Standalone
+
 Run after each comic generation to measure panel quality:
 
 ```bash
 # Score all panels in a directory
-python3 scripts/quality_tracker.py output/panels/ --output scores.json --verbose
+$PYTHON scripts/quality_tracker.py output/panels/ --output scores.json --verbose
 
 # Score single image
-python3 scripts/quality_tracker.py panel.png
+$PYTHON scripts/quality_tracker.py panel.png
 
 # With composition analysis (center bias, thirds, flow, harmony, palette)
-python3 scripts/quality_tracker.py output/panels/ --composition --verbose
+$PYTHON scripts/quality_tracker.py output/panels/ --composition --verbose
 
 # With panel-sequence analysis (flow continuity, pacing, shot variety)
-python3 scripts/quality_tracker.py output/panels/ --composition --sequence --report
+$PYTHON scripts/quality_tracker.py output/panels/ --composition --sequence --report
 
 # Detailed text report
-python3 scripts/quality_tracker.py output/panels/ --composition --sequence --report
+$PYTHON scripts/quality_tracker.py output/panels/ --composition --sequence --report
 ```
 
 ### Technical Metrics

@@ -73,6 +73,9 @@ VALID_FOCAL_POINTS = {
 }
 VALID_COMPOSITION_OVERRIDES = {"symmetric", "dynamic", None}
 
+# Valid panel_importance levels (1–3 pacing tool)
+VALID_PANEL_IMPORTANCE = {1, 2, 3}
+
 # Shot types that count as "establishing" shots
 ESTABLISHING_SHOTS = {"wide", "extreme_wide", "long", "extreme_long"}
 
@@ -439,6 +442,29 @@ def validate_story_plan(plan: dict) -> tuple[bool, list[str]]:
                         f"{prefix}: 'composition_override' must be "
                         f"'symmetric', 'dynamic', or null"
                     )
+            if "panel_importance" in p:
+                pi = p["panel_importance"]
+                if not isinstance(pi, int) or pi not in VALID_PANEL_IMPORTANCE:
+                    errors.append(
+                        f"{prefix}: 'panel_importance' must be 1, 2, or 3"
+                    )
+            if "character_positions" in p:
+                cp_val = p["character_positions"]
+                if not isinstance(cp_val, dict):
+                    errors.append(f"{prefix}: 'character_positions' must be a dict")
+                else:
+                    valid_sides = {"left", "right", "center"}
+                    for cid_key, side in cp_val.items():
+                        if cid_key not in char_ids:
+                            errors.append(
+                                f"{prefix}.character_positions: character "
+                                f"'{cid_key}' not in characters list"
+                            )
+                        if not isinstance(side, str) or side not in valid_sides:
+                            errors.append(
+                                f"{prefix}.character_positions['{cid_key}']: "
+                                f"must be 'left', 'right', or 'center'"
+                            )
 
     # ---- Cross-panel references (connects_to) ----------------------------
     if isinstance(panels, list):
@@ -540,6 +566,38 @@ _ACCESSORY_KEYWORDS = [
 ]
 
 
+def _build_outfit_from_costume_details(costume: dict) -> str:
+    """Build a canonical outfit string from costume_details.
+
+    This string is used for *costume locking*: it is injected verbatim into
+    every panel prompt so the character always wears the same clothes.
+
+    Args:
+        costume: Dict with optional keys top, bottom, shoes, accessories.
+
+    Returns:
+        A short, comma-separated outfit description (e.g.
+        ``"grey hoodie, dark jeans, white sneakers"``).
+        Returns ``""`` if all fields are empty.
+    """
+    if not costume or not isinstance(costume, dict):
+        return ""
+
+    parts: list[str] = []
+    for key in ("top", "bottom", "shoes"):
+        val = costume.get(key, "")
+        if val and isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+
+    accessories = costume.get("accessories", [])
+    if isinstance(accessories, list):
+        for acc in accessories:
+            if acc and isinstance(acc, str) and acc.strip():
+                parts.append(acc.strip())
+
+    return ", ".join(parts)
+
+
 def _extract_costume_from_description(description: str) -> dict:
     """Heuristically extract costume details from a visual description string.
 
@@ -593,13 +651,18 @@ def enrich_story_plan(plan: dict) -> dict:
     plan.setdefault("reading_direction", defaults.get("reading_direction", "ltr"))
     plan.setdefault("preset", defaults.get("preset", "dreamshaperXL"))
 
-    # Character-level enrichment: costume_details
+    # Character-level enrichment: costume_details + outfit
     for ch in plan.get("characters", []):
         if "costume_details" not in ch:
             # Attempt to extract costume_details from visual_description
             ch["costume_details"] = _extract_costume_from_description(
                 ch.get("visual_description", "")
             )
+        # Build canonical outfit string for costume locking.
+        # If the user explicitly set "outfit", keep it; otherwise synthesise
+        # from costume_details so every panel prompt gets the same description.
+        if "outfit" not in ch:
+            ch["outfit"] = _build_outfit_from_costume_details(ch.get("costume_details", {}))
 
     # Panel-level defaults
     panels = plan.get("panels", [])
@@ -635,6 +698,12 @@ def enrich_story_plan(plan: dict) -> dict:
 
     # --- Narrative weight auto-estimation ---
     _enrich_narrative_weights(panels_sorted)
+
+    # --- 180-degree rule (character_positions per scene) ---
+    _enrich_180_degree_rule(panels_sorted)
+
+    # --- Panel importance for pacing ---
+    _enrich_panel_importance(panels_sorted)
 
     # --- Sequential composition auto-enrichment ---
     _enrich_sequential_fields(panels_sorted)
@@ -834,6 +903,142 @@ def _validate_splash_usage(panels: list[dict]) -> list[str]:
             )
 
     return warnings
+
+
+def _enrich_180_degree_rule(panels_sorted: list[dict]) -> None:
+    """Apply the 180-degree rule for dialogue scenes.
+
+    In film and comics, the 180-degree rule states that during a dialogue
+    scene between two (or more) characters, each character should remain
+    on the same side of the frame across all panels in that scene. This
+    creates spatial consistency and avoids disorienting the reader.
+
+    This function groups panels by scene, identifies dialogue scenes
+    (panels with 2+ characters present), and assigns consistent
+    ``character_positions`` (left / right) per scene.  Positions are
+    only set on panels that don't already have them.
+
+    Modifies panels in-place.
+    """
+    # Group panels by scene key (normalised lower-case scene text)
+    scene_groups: dict[str, list[dict]] = {}
+    for panel in panels_sorted:
+        scene_raw = panel.get("scene", "").strip().lower()
+        if not scene_raw:
+            continue
+        scene_groups.setdefault(scene_raw, []).append(panel)
+
+    for _scene_key, scene_panels in scene_groups.items():
+        # Collect all unique characters that appear in dialogue panels
+        # within this scene.
+        dialogue_chars: list[str] = []
+        for panel in scene_panels:
+            chars = panel.get("characters_present", [])
+            if len(chars) < 2:
+                continue
+            for cid in chars:
+                if cid not in dialogue_chars:
+                    dialogue_chars.append(cid)
+
+        if len(dialogue_chars) < 2:
+            continue  # No multi-character dialogue in this scene
+
+        # Assign positions: first character → left, second → right,
+        # additional characters get alternating sides.
+        positions: dict[str, str] = {}
+        for idx, cid in enumerate(dialogue_chars):
+            if idx == 0:
+                positions[cid] = "left"
+            elif idx == 1:
+                positions[cid] = "right"
+            else:
+                # Alternate for 3+ characters
+                positions[cid] = "left" if idx % 2 == 0 else "right"
+
+        # Apply positions to every panel in this scene that has 2+ characters
+        for panel in scene_panels:
+            chars = panel.get("characters_present", [])
+            if len(chars) < 2:
+                continue
+            if "character_positions" not in panel:
+                # Only include positions for characters actually present
+                panel_positions = {
+                    cid: positions[cid]
+                    for cid in chars
+                    if cid in positions
+                }
+                if panel_positions:
+                    panel["character_positions"] = panel_positions
+
+
+def _enrich_panel_importance(panels_sorted: list[dict]) -> None:
+    """Auto-assign panel_importance (1–3) based on narrative context.
+
+    Panel importance drives panel sizing as a pacing tool:
+      3 = Key moment  (splash / large panel)
+      2 = Important   (medium panel, default)
+      1 = Transition  (small panel)
+
+    Only sets the field on panels that don't already have it.
+    Modifies panels in-place.
+    """
+    high_action_keywords = {
+        "reveal", "confront", "transform", "discover", "climax",
+        "explosion", "battle", "death", "sacrifice", "final",
+        "showdown", "breakthrough",
+    }
+    transition_keywords = {
+        "walk", "travel", "transition", "pause", "wait",
+        "sit", "stand", "look",
+    }
+
+    for panel in panels_sorted:
+        if "panel_importance" in panel:
+            continue  # Already set explicitly
+
+        weight = panel.get("narrative_weight", "medium")
+        mood = panel.get("mood", "neutral").lower()
+        action = panel.get("action", "").lower()
+        shot = panel.get("shot_type", "medium")
+
+        # Splash pages are always importance 3
+        if weight == "splash":
+            panel["panel_importance"] = 3
+            continue
+
+        score = 0
+
+        # Narrative weight contribution
+        if weight == "high":
+            score += 2
+        elif weight == "low":
+            score -= 1
+
+        # Action keywords
+        if any(kw in action for kw in high_action_keywords):
+            score += 1
+        if any(kw in action for kw in transition_keywords) and not panel.get("dialogue"):
+            score -= 1
+
+        # Mood contribution
+        dramatic_moods = {"dramatic", "intense", "dark", "powerful", "climactic"}
+        calm_moods = {"neutral", "calm", "peaceful"}
+        if mood in dramatic_moods:
+            score += 1
+        elif mood in calm_moods:
+            score -= 0.5
+
+        # Close-ups on emotional beats → important
+        if shot in ("close_up", "extreme_close_up") and mood not in calm_moods:
+            score += 0.5
+
+        # Map score to importance
+        if score >= 2:
+            panel["panel_importance"] = 3
+        elif score <= -1:
+            panel["panel_importance"] = 1
+        else:
+            panel["panel_importance"] = 2
 
 
 def _enrich_sequential_fields(panels_sorted: list[dict]) -> None:

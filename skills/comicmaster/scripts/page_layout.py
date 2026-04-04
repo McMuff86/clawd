@@ -36,6 +36,16 @@ logger = logging.getLogger(__name__)
 # Weight-to-unit mapping for dynamic row budget allocation
 WEIGHT_UNITS = {"low": 0.7, "medium": 1.0, "high": 1.5, "splash": 3.0}
 
+# TODO: Use panel_importance (1–3) from story_planner to influence panel sizing.
+#   panel_importance=3 → Key moment: large panel / splash (e.g., 2x width or full row)
+#   panel_importance=2 → Important: standard/medium panel size
+#   panel_importance=1 → Transition: smaller panel (e.g., 0.5x width)
+# The panel_importance field is set by _enrich_panel_importance() in story_planner.py.
+# Integration points:
+#   - _compute_panel_sizes(): scale panel dimensions by importance
+#   - _assign_row_layouts(): give importance=3 panels full-width rows
+#   - compose_page(): pass panel_importance through to sizing logic
+
 # Row budget — how many weight-units fit in a single row
 ROW_BUDGET = 3.0
 

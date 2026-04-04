@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -31,8 +32,21 @@ logger = logging.getLogger("comicmaster.face_validator")
 
 # --- Configuration ---
 SIMILARITY_THRESHOLD = 0.7  # Cosine similarity threshold
+NON_HUMAN_THRESHOLD = 0.4  # Lower threshold for non-human characters
 MAX_RETRIES = 2  # Max retry attempts when face similarity is below threshold
 MIN_FACE_SIZE = 40  # Minimum face bounding box size in pixels
+
+# Keywords that indicate a non-human character (auto-lower threshold)
+NON_HUMAN_KEYWORDS = re.compile(
+    r"\b(robot|android|mech|cyborg|alien|creature|monster|animal|"
+    r"dragon|beast|insect|machine|automaton|golem|elemental)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_non_human(description: str) -> bool:
+    """Return True if the character description suggests a non-human entity."""
+    return bool(NON_HUMAN_KEYWORDS.search(description or ""))
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -183,6 +197,59 @@ class PILHistogramBackend:
         return _cosine_similarity(hist_ref, hist_panel)
 
 
+# ── Backend: CLIP (Visual Similarity) ─────────────────────────────────────
+
+class CLIPBackend:
+    """Image similarity using OpenAI CLIP vision encoder.
+
+    Works for ANY visual subject — humans, robots, aliens, animals — because
+    it compares general visual features rather than face-specific landmarks.
+    Uses ``openai/clip-vit-base-patch32`` from the ``transformers`` library.
+    """
+
+    MODEL_NAME = "openai/clip-vit-base-patch32"
+
+    def __init__(self):
+        self.available = False
+        self._model = None
+        self._processor = None
+        try:
+            import torch  # noqa: F401
+            from transformers import CLIPModel, CLIPProcessor
+
+            self._processor = CLIPProcessor.from_pretrained(self.MODEL_NAME)
+            self._model = CLIPModel.from_pretrained(self.MODEL_NAME)
+            self._model.eval()
+            self.available = True
+            logger.info("CLIP backend initialized (%s)", self.MODEL_NAME)
+        except Exception as e:
+            logger.debug("CLIP backend not available: %s", e)
+
+    def _get_embedding(self, image_path: str) -> Optional[np.ndarray]:
+        """Extract CLIP image embedding."""
+        if not self.available:
+            return None
+        try:
+            import torch
+
+            img = Image.open(image_path).convert("RGB")
+            inputs = self._processor(images=img, return_tensors="pt")
+            with torch.no_grad():
+                emb = self._model.get_image_features(**inputs)
+            return emb.squeeze().cpu().numpy()
+        except Exception as e:
+            logger.debug("CLIP embedding extraction failed for %s: %s", image_path, e)
+            return None
+
+    def compare(self, ref_path: str, panel_path: str) -> Optional[float]:
+        """Compare two images using CLIP embeddings (cosine similarity)."""
+        emb_ref = self._get_embedding(ref_path)
+        emb_panel = self._get_embedding(panel_path)
+        if emb_ref is None or emb_panel is None:
+            return None
+        return _cosine_similarity(emb_ref, emb_panel)
+
+
 # ── Main Validator Class ──────────────────────────────────────────────────
 
 class FaceValidator:
@@ -191,16 +258,32 @@ class FaceValidator:
     Tries backends in order of quality:
     1. InsightFace (ArcFace embeddings)
     2. face_recognition (dlib-based)
-    3. PIL histogram fallback
+    3. CLIP (general visual similarity — works for non-human subjects)
+    4. PIL histogram fallback
+
+    Per-character options (passed via *character_thresholds* / *skip_characters*):
+    - Override similarity threshold per character
+    - Skip validation entirely for specific characters
+    - Auto-detect non-human characters and lower threshold
 
     Usage:
-        validator = FaceValidator()
+        validator = FaceValidator(
+            character_thresholds={"robot_char": 0.4},
+            skip_characters={"bg_char"},
+        )
         result = validator.validate_panel(ref_image_path, panel_image_path)
-        # result = {"similarity": 0.85, "passed": True, "backend": "insightface"}
+        # result = {"similarity": 0.85, "passed": True, "backend": "clip"}
     """
 
-    def __init__(self, threshold: float = SIMILARITY_THRESHOLD):
+    def __init__(
+        self,
+        threshold: float = SIMILARITY_THRESHOLD,
+        character_thresholds: dict[str, float] | None = None,
+        skip_characters: set[str] | None = None,
+    ):
         self.threshold = threshold
+        self.character_thresholds: dict[str, float] = character_thresholds or {}
+        self.skip_characters: set[str] = skip_characters or set()
         self.backend = None
         self.backend_name = "none"
 
@@ -217,14 +300,25 @@ class FaceValidator:
             self.backend_name = "face_recognition"
             return
 
+        clip = CLIPBackend()
+        if clip.available:
+            self.backend = clip
+            self.backend_name = "clip"
+            return
+
         # Fallback
         pil = PILHistogramBackend()
         self.backend = pil
         self.backend_name = "pil_histogram"
         logger.warning(
             "Using PIL histogram fallback for face validation. "
-            "Install insightface or face_recognition for better accuracy."
+            "Install insightface, face_recognition, or transformers+torch "
+            "for better accuracy."
         )
+
+    def get_threshold(self, character_id: str) -> float:
+        """Return the similarity threshold for a given character."""
+        return self.character_thresholds.get(character_id, self.threshold)
 
     def validate_panel(
         self,
@@ -245,15 +339,27 @@ class FaceValidator:
             - passed: bool (True if similarity >= threshold or no face detected)
             - backend: str (backend name used)
             - character_id: str
+            - threshold: float (effective threshold used)
+            - skipped: bool (True if validation was skipped)
             - error: str or None
         """
+        char_threshold = self.get_threshold(character_id)
+
         result = {
             "similarity": None,
             "passed": True,  # default to passed (no face = pass)
             "backend": self.backend_name,
             "character_id": character_id,
+            "threshold": char_threshold,
+            "skipped": False,
             "error": None,
         }
+
+        # Skip validation for opted-out characters
+        if character_id in self.skip_characters:
+            result["skipped"] = True
+            logger.info(f"Face validation skipped for {character_id} (skip_face_validation=true)")
+            return result
 
         if self.backend is None:
             result["error"] = "No face validation backend available"
@@ -273,13 +379,13 @@ class FaceValidator:
             return result
 
         result["similarity"] = round(similarity, 4)
-        result["passed"] = similarity >= self.threshold
+        result["passed"] = similarity >= char_threshold
         log_fn = logger.info if result["passed"] else logger.warning
         log_fn(
             f"Face validation [{character_id}]: "
             f"similarity={similarity:.4f} "
             f"{'✅ PASS' if result['passed'] else '❌ FAIL'} "
-            f"(threshold={self.threshold}, backend={self.backend_name})"
+            f"(threshold={char_threshold}, backend={self.backend_name})"
         )
         return result
 
@@ -384,6 +490,60 @@ def generate_quality_report(all_validations: list[dict]) -> str:
             )
 
     return "\n".join(lines)
+
+
+# ── Story Plan Helpers ────────────────────────────────────────────────────
+
+def build_character_thresholds(
+    characters: list[dict],
+    default_threshold: float = SIMILARITY_THRESHOLD,
+    non_human_threshold: float = NON_HUMAN_THRESHOLD,
+) -> tuple[dict[str, float], set[str]]:
+    """Build per-character threshold map and skip-set from story plan characters.
+
+    For each character dict, checks:
+    - ``"face_threshold"`` — explicit override
+    - ``"skip_face_validation"`` — if True, add to skip set
+    - ``"description"`` — auto-detect non-human keywords → lower threshold
+
+    Args:
+        characters: List of character dicts from story_plan["characters"].
+        default_threshold: Default similarity threshold for human characters.
+        non_human_threshold: Threshold for auto-detected non-human characters.
+
+    Returns:
+        (character_thresholds, skip_characters) — ready for FaceValidator init.
+    """
+    thresholds: dict[str, float] = {}
+    skip: set[str] = set()
+
+    for char in characters:
+        char_id = char.get("id", "")
+        if not char_id:
+            continue
+
+        # Skip validation entirely
+        if char.get("skip_face_validation", False):
+            skip.add(char_id)
+            continue
+
+        # Explicit threshold override from story plan
+        if "face_threshold" in char:
+            thresholds[char_id] = float(char["face_threshold"])
+            continue
+
+        # Auto-detect non-human characters from description
+        description = char.get("description", "")
+        if detect_non_human(description):
+            thresholds[char_id] = non_human_threshold
+            logger.info(
+                "Auto-detected non-human character %r — "
+                "using lower threshold %.2f",
+                char_id,
+                non_human_threshold,
+            )
+
+    return thresholds, skip
 
 
 # ── CLI Test ──────────────────────────────────────────────────────────────
